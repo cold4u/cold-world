@@ -17,6 +17,13 @@ A 3D spherical low-poly planet delivery adventure built with Three.js and Svelte
   - Smelly Falls (Waterfall canyon, Wooden dock)
   - Capital Corp (Futuristic Tech Laboratories)
   - Tropical Beach (Palm trees, Sand shores, Ocean pier)
+- **Real-Time Multiplayer & 3D Proximity Voice Chat**:
+  - **Up to 10 Simultaneous Players per Room**: Explore the spherical world together in real-time with peer-to-peer WebRTC mesh networking.
+  - **3D Spatial Proximity Voice Chat**: Natural directional audio that fades smoothly with distance across the planet's curvature—walk close to a player to hear them loud and clear, or wander to the far side of the world for peaceful silence.
+  - **Voice Activity Detection & 3D Speaking Indicators**: Floating `🔊` green voice wave badges animate above players' heads whenever they speak.
+  - **Quick Mic Controls**: Instant `M` key hotkey or on-screen button to mute/unmute microphone with echo cancellation and noise suppression.
+  - **Shareable Room Invites**: Instant 1-click room invite links (`?room=roomName`) so you can explore private planets with friends.
+  - **Zero-Backend Deployment**: Powered by PeerJS with public STUN signaling, running 100% on static GitHub Pages.
 - **Living Wildlife & World Inhabitants (19 Unique Characters - Zero Clones)**:
   - **Every Citizen is Unique**: 19 distinct character models across all 7 biomes—each with individual voices, dialogue, and roles (Arthur the Courier, Chloe the Florist, Boss Reginald, Caveman Grog, Captain Steve, Chef Pierre, Dave the Musician, Mountain Guy, Grandma Etsu, Dr. Frebi, Dr. Frieb, Chief Mechanic Otto, Patrolman Tengo, Technician Getave, and Pale Man).
   - **Prominent & Interactive Children**:
@@ -65,6 +72,7 @@ A 3D spherical low-poly planet delivery adventure built with Three.js and Svelte
 - **Jump**: `Space`
 - **Sprint**: `Shift`
 - **Interact / Talk**: `E` or click on nearby citizens
+- **Toggle Voice Chat Mic**: `M` or click the on-screen mic button
 - **Orbit Camera**: Left-click & drag
 - **Zoom**: Mouse scroll wheel
 
