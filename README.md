@@ -55,6 +55,7 @@ A 3D spherical low-poly planet delivery adventure built with Three.js and Svelte
   - Animal Crossing style speech voice blips with pitch variations.
   - Responsive footstep, jump, and victory sound effects.
 - **Customization & UI**:
+  - **High-Performance 60 FPS Engine**: Optimized WebGL pipeline with hardware `PCFShadowMap`, 1024px dynamic shadow maps, selective shadow casting, matrix auto-update caching, and real-time live FPS monitor overlay.
   - Complete courier outfit customizer.
   - Delivery checklist log modal.
   - Responsive mobile touch support with on-screen virtual joystick.

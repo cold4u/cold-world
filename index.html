@@ -26,6 +26,26 @@
       <meta name="author" content="cold4u">
   </head>
     <body>
-    
+      <div id="fps-badge" style="position:fixed;top:14px;right:16px;z-index:999999;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:12px;font-weight:700;color:#22c55e;background:rgba(15,23,42,0.75);backdrop-filter:blur(6px);padding:4px 10px;border-radius:20px;border:1px solid rgba(255,255,255,0.15);pointer-events:none;letter-spacing:0.5px;box-shadow:0 4px 12px rgba(0,0,0,0.25);">60 FPS</div>
+      <script>
+        (function() {
+          let frames = 0, last = performance.now();
+          const badge = document.getElementById('fps-badge');
+          function tick(now) {
+            frames++;
+            if (now - last >= 500) {
+              const fps = Math.round((frames * 1000) / (now - last));
+              if (badge) {
+                badge.textContent = fps + ' FPS';
+                badge.style.color = fps >= 55 ? '#22c55e' : (fps >= 40 ? '#f59e0b' : '#ef4444');
+              }
+              frames = 0;
+              last = now;
+            }
+            requestAnimationFrame(tick);
+          }
+          requestAnimationFrame(tick);
+        })();
+      </script>
 </body>
 </html>
