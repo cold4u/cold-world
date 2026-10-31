@@ -11150,7 +11150,732 @@ _addOwl("owl-cliff",[-6.2,-1.8,25.1],"Cliff Owl",["Hoo... The boss paces on this
 _addScout("scout-lab",[-9.2,-5.8,-19.8],"Junior Tim",["Dr. Frebi gave me my very own visitor lab badge!","We are measuring how gravity bends around our spherical world!","Science makes the impossible possible!"],"male1","#66BDE6");
 _addFox("fox-lab",[2.5,6.1,-23.2],"Sneaky Fox",["*peeks curiously from behind the tech crates*","Yip! *curiously taps a glowing cable*","*scampers into the shadows*"],"male3","#66BDE6");
 
-await Promise.all(this.npcs.map(e=>e.ready))}initQuests(){this.questsController=new questsController(this)}playInAnimation(){const e=this.npcs.find(i=>{var s;return((s=i.mesh)==null?void 0:s._id)==="musician"});return e&&events$1.emit("webgl_play_positional","dialogue-music-dave",e.mesh,.1,0,!1),events$1.on("npc_talk_update",({id:i,object:s,talking:a})=>{i==="musician"&&(a?events$1.emit("webgl_stop_positional","dialogue-music-dave"):events$1.emit("webgl_play_positional","dialogue-music-dave",s,.1,0,!1))}),super.playInAnimation()}}const _obj$1=new Object3D,_obj2=new Object3D,mapping=[{accessory:"shoes",action:-1},{accessory:"shoes",action:1},{accessory:"bottom",action:-1},{accessory:"bottom",action:1},{accessory:"top",action:-1},{accessory:"top",action:1},{accessory:"hair",action:-1},{accessory:"hair",action:1}],size=.175,baseGeo1=new PlaneGeometry(size,size),baseGeo2=new PlaneGeometry(size,size),baseGeo=mergeGeometries([baseGeo1,baseGeo2]);baseGeo.setAttribute("side",new BufferAttribute(new Int32Array([1,1,1,1,0,0,0,0]),1));baseGeo.setAttribute("vertid",new BufferAttribute(new Int32Array([1,2,3,4,1,2,3,4]),1));class traitarrows{constructor(e){this.scene=e,this.shown=!1,this.lastTouched=0,this.offsetX=.5,this.offsetXArrow=.5075,this.baseY=.1,this.offsetY=.46,this.closeY=1.9,this.ready=miscutils.deferred(),this.init()}async init(){const e=new InstancedBufferGeometry;e.instanceCount=9;for(const _ in baseGeo.attributes)e.setAttribute(_,baseGeo.attributes[_]);e.setIndex(baseGeo.index),e.setAttribute("hover",new InstancedBufferAttribute(new Float32Array(e.instanceCount).fill(0),1)),e.setAttribute("scaleHover",new InstancedBufferAttribute(new Float32Array(e.instanceCount).fill(1),1)),e._animObjs=[];for(let _=0;_<e.instanceCount;_++)e._animObjs.push({hover:0,scaleHover:1});const i=new ShaderMaterial({uniformsGroups:[global$1.UBO],uniforms:{uColor:{value:new Color("#F8F8F8")},uColorShadow:{value:new Color("#647A87")},uSeed:{value:Math.random()},uShow:{value:0},uShadowOffset:{value:.01175}},vertexShader:`
+this.createWorldExpansion();
+await Promise.all(this.npcs.map(e=>e.ready))}
+createWorldExpansion(){
+  try {
+    const worldGroup = new Group();
+    worldGroup.name = "cold_world_expansion";
+
+    // Reusable materials cache
+    const matCache = {};
+    const getMat = (col, rough = 0.8, metal = 0.1, emissive = 0, emInt = 0) => {
+      const k = col + '_' + rough + '_' + metal + '_' + emissive + '_' + emInt;
+      if (!matCache[k]) {
+        const opts = { color: col, roughness: rough, metalness: metal, flatShading: true };
+        if (emissive) { opts.emissive = new Color(emissive); opts.emissiveIntensity = emInt; }
+        matCache[k] = new MeshStandardMaterial(opts);
+      }
+      return matCache[k];
+    };
+
+    const box = (w, h, d, col, rough = 0.8, metal = 0.1, em = 0, emInt = 0) => {
+      const m = new Mesh(new BoxGeometry(w, h, d), getMat(col, rough, metal, em, emInt));
+      m.castShadow = true;
+      m.receiveShadow = true;
+      return m;
+    };
+
+    const sphere = (r, ws, hs, col, rough = 0.8, metal = 0.1, em = 0, emInt = 0) => {
+      const m = new Mesh(new SphereGeometry(r, ws, hs), getMat(col, rough, metal, em, emInt));
+      m.castShadow = true;
+      m.receiveShadow = true;
+      return m;
+    };
+
+    // Spherical raycaster snapping to collision mesh
+    const snapG = (p) => {
+      if (this.characterInitialOptions && this.characterInitialOptions.collider) {
+        const cM = this._hitMeshObj || (this._hitMeshObj = new Mesh(this.characterInitialOptions.collider));
+        const dir = new Vector3().fromArray(p).normalize();
+        const ray = new Raycaster(dir.clone().multiplyScalar(50), dir.clone().negate());
+        const hits = ray.intersectObject(cM);
+        if (hits.length > 0) return [hits[0].point.x, hits[0].point.y, hits[0].point.z];
+      }
+      return p;
+    };
+
+    // Helper to position a group on the planet surface with proper up/tangent orientation
+    const placeOnSphere = (pos, rotY = 0) => {
+      const p = snapG(pos);
+      const up = new Vector3().fromArray(p).normalize();
+      const ref = Math.abs(up.y) < 0.9 ? new Vector3(0, 1, 0) : new Vector3(0, 0, 1);
+      const right = new Vector3().crossVectors(up, ref).normalize();
+      const fwd = new Vector3().crossVectors(right, up).normalize();
+      const m = new Matrix4().set(
+        right.x, up.x, fwd.x, 0,
+        right.y, up.y, fwd.y, 0,
+        right.z, up.z, fwd.z, 0,
+        0, 0, 0, 1
+      );
+      const g = new Group();
+      g.position.set(p[0], p[1], p[2]);
+      g.quaternion.setFromRotationMatrix(m);
+      if (rotY) g.rotateY(rotY);
+      return g;
+    };
+
+    // ==========================================
+    // 1. DELIVERY VANS ("Cold World Express")
+    // ==========================================
+    const buildVan = (bodyColor, roofColor, accentColor, vanNumber = "01") => {
+      const van = new Group();
+      van.name = "DeliveryVan_" + vanNumber;
+
+      // Chassis
+      const chassis = box(1.7, 0.35, 3.4, "#262b2f", 0.9, 0.2);
+      chassis.position.y = 0.35;
+      van.add(chassis);
+
+      // Bumpers
+      const fBump = box(1.76, 0.2, 0.2, "#1c1f21", 0.9, 0.2);
+      fBump.position.set(0, 0.3, 1.75);
+      const rBump = box(1.76, 0.2, 0.2, "#1c1f21", 0.9, 0.2);
+      rBump.position.set(0, 0.3, -1.75);
+      van.add(fBump, rBump);
+
+      // Cargo body
+      const cargo = box(1.68, 1.3, 2.2, bodyColor, 0.75, 0.1);
+      cargo.position.set(0, 1.15, -0.45);
+      van.add(cargo);
+
+      // Driver Cab
+      const cab = box(1.65, 1.05, 1.05, bodyColor, 0.75, 0.1);
+      cab.position.set(0, 1.0, 1.15);
+      van.add(cab);
+
+      // Roof
+      const roof = box(1.72, 0.12, 3.3, roofColor, 0.8, 0.1);
+      roof.position.set(0, 1.83, 0.05);
+      van.add(roof);
+
+      // Side decorative accent stripe
+      const strL = box(0.04, 0.2, 2.1, accentColor, 0.7, 0.1);
+      strL.position.set(0.85, 1.15, -0.45);
+      const strR = box(0.04, 0.2, 2.1, accentColor, 0.7, 0.1);
+      strR.position.set(-0.85, 1.15, -0.45);
+      van.add(strL, strR);
+
+      // Windshield & side windows
+      const ws = box(1.5, 0.55, 0.08, "#2b3b47", 0.2, 0.8);
+      ws.position.set(0, 1.25, 1.68);
+      ws.rotation.x = -0.15;
+      const winL = box(0.06, 0.45, 0.7, "#2b3b47", 0.2, 0.8);
+      winL.position.set(0.84, 1.25, 1.15);
+      const winR = box(0.06, 0.45, 0.7, "#2b3b47", 0.2, 0.8);
+      winR.position.set(-0.84, 1.25, 1.15);
+      van.add(ws, winL, winR);
+
+      // Front Grille & Logo
+      const grille = box(1.1, 0.35, 0.06, "#181a1c", 0.9, 0.2);
+      grille.position.set(0, 0.7, 1.7);
+      const logo = box(0.25, 0.12, 0.08, accentColor, 0.5, 0.3);
+      logo.position.set(0, 0.75, 1.72);
+      van.add(grille, logo);
+
+      // Headlights
+      const hL = box(0.3, 0.2, 0.08, "#fffbe0", 0.3, 0.1, "#ffe57f", 0.8);
+      hL.position.set(0.62, 0.75, 1.7);
+      const hR = box(0.3, 0.2, 0.08, "#fffbe0", 0.3, 0.1, "#ffe57f", 0.8);
+      hR.position.set(-0.62, 0.75, 1.7);
+      van.add(hL, hR);
+
+      // Taillights
+      const tL = box(0.2, 0.35, 0.06, "#ff3344", 0.4, 0.1, "#dd1122", 0.6);
+      tL.position.set(0.68, 0.9, -1.56);
+      const tR = box(0.2, 0.35, 0.06, "#ff3344", 0.4, 0.1, "#dd1122", 0.6);
+      tR.position.set(-0.68, 0.9, -1.56);
+      van.add(tL, tR);
+
+      // Wheels
+      const wX = 0.88;
+      for (const wZ of [1.05, -1.05]) {
+        for (const sign of [1, -1]) {
+          const posX = wX * sign;
+          const tire = box(0.25, 0.65, 0.65, "#181818", 0.95, 0.05);
+          tire.position.set(posX, 0.32, wZ);
+          const hub = box(0.27, 0.3, 0.3, "#e2e8f0", 0.5, 0.5);
+          hub.position.set(posX, 0.32, wZ);
+          van.add(tire, hub);
+        }
+      }
+
+      // Roof Parcel Luggage Rack
+      const rack = box(1.3, 0.08, 1.8, "#475569", 0.6, 0.4);
+      rack.position.set(0, 1.92, -0.4);
+      const p1 = box(0.5, 0.35, 0.6, "#d29557", 0.9, 0.0);
+      p1.position.set(0.25, 2.12, -0.4);
+      p1.rotation.y = 0.1;
+      const p2 = box(0.45, 0.3, 0.5, "#c4823f", 0.9, 0.0);
+      p2.position.set(-0.3, 2.08, -0.2);
+      p2.rotation.y = -0.15;
+      const p3 = box(0.4, 0.25, 0.45, "#e5b878", 0.9, 0.0);
+      p3.position.set(0.1, 2.1, -0.85);
+      van.add(rack, p1, p2, p3);
+
+      return van;
+    };
+
+    // Spawn 5 Vans
+    const vanConfigs = [
+      { name: "van_plaza", pos: [27.4, 3.8, 3.6], rot: 0.3, body: "#1d4ed8", roof: "#f8fafc", acc: "#facc15", num: "01" },
+      { name: "van_lab", pos: [-8.5, -9.8, -17.8], rot: 1.9, body: "#0e7490", roof: "#e2e8f0", acc: "#f97316", num: "04" },
+      { name: "van_beach", pos: [17.8, 15.2, 13.5], rot: -0.7, body: "#0284c7", roof: "#fef08a", acc: "#fb7185", num: "07" },
+      { name: "van_mountain", pos: [-11.2, 28.5, 2.8], rot: 2.2, body: "#15803d", roof: "#f1f5f9", acc: "#eab308", num: "03" },
+      { name: "van_falls", pos: [16.2, -13.5, -8.8], rot: -1.4, body: "#c2410c", roof: "#fef3c7", acc: "#ffedd5", num: "05" }
+    ];
+
+    for (const vc of vanConfigs) {
+      const g = placeOnSphere(vc.pos, vc.rot);
+      g.add(buildVan(vc.body, vc.roof, vc.acc, vc.num));
+      worldGroup.add(g);
+    }
+
+    // ==========================================
+    // 2. DETAILED BUILDINGS
+    // ==========================================
+
+    // Building 1: Town Postal Station & Parcel Depot
+    const buildPostalStation = () => {
+      const b = new Group();
+      b.name = "PostalStation";
+
+      // Foundation deck
+      const base = box(4.6, 0.4, 4.2, "#5c3d2e", 0.9, 0.1);
+      base.position.y = 0.2;
+      b.add(base);
+
+      // Main hall
+      const hall = box(3.8, 2.6, 3.4, "#fdfcf9", 0.85, 0.05);
+      hall.position.set(0, 1.7, -0.2);
+      b.add(hall);
+
+      // Roof (Gabled pitched roof)
+      const roofL = box(4.2, 0.22, 2.2, "#2b5278", 0.7, 0.1);
+      roofL.position.set(0, 3.35, 0.55);
+      roofL.rotation.x = 0.45;
+      const roofR = box(4.2, 0.22, 2.2, "#2b5278", 0.7, 0.1);
+      roofR.position.set(0, 3.35, -0.95);
+      roofR.rotation.x = -0.45;
+      b.add(roofL, roofR);
+
+      // Stone chimney
+      const chim = box(0.65, 3.8, 0.65, "#64748b", 0.9, 0.1);
+      chim.position.set(1.4, 2.2, -1.2);
+      const chimCap = box(0.85, 0.15, 0.85, "#475569", 0.9, 0.1);
+      chimCap.position.set(1.4, 4.15, -1.2);
+      b.add(chim, chimCap);
+
+      // Front entrance porch & awning
+      const postL = box(0.18, 2.2, 0.18, "#784b2e");
+      postL.position.set(1.2, 1.3, 1.6);
+      const postR = box(0.18, 2.2, 0.18, "#784b2e");
+      postR.position.set(-1.2, 1.3, 1.6);
+      const awning = box(2.8, 0.15, 1.2, "#1d4ed8", 0.7, 0.1);
+      awning.position.set(0, 2.35, 1.5);
+      awning.rotation.x = 0.15;
+      b.add(postL, postR, awning);
+
+      // Door & sign
+      const door = box(1.1, 1.8, 0.1, "#6b4124");
+      door.position.set(0, 1.3, 1.52);
+      const sign = box(1.8, 0.45, 0.12, "#fcd34d", 0.6, 0.2);
+      sign.position.set(0, 2.6, 1.55);
+      b.add(door, sign);
+
+      // Windows with warm light
+      const win1 = box(0.8, 0.8, 0.12, "#fffbe0", 0.3, 0.1, "#fcd34d", 0.5);
+      win1.position.set(1.3, 1.7, 1.52);
+      const win2 = box(0.8, 0.8, 0.12, "#fffbe0", 0.3, 0.1, "#fcd34d", 0.5);
+      win2.position.set(-1.3, 1.7, 1.52);
+      b.add(win1, win2);
+
+      // Red Postal Drop Box outside
+      const pBox = box(0.45, 0.95, 0.45, "#dc2626", 0.6, 0.2);
+      pBox.position.set(1.8, 0.85, 1.6);
+      const pSlot = box(0.28, 0.08, 0.48, "#fcd34d", 0.4, 0.4);
+      pSlot.position.set(1.8, 1.05, 1.6);
+      b.add(pBox, pSlot);
+
+      return b;
+    };
+    const gPostal = placeOnSphere([25.5, 5.8, 6.2], 0.2);
+    gPostal.add(buildPostalStation());
+    worldGroup.add(gPostal);
+
+    // Building 2: Seaside Beacon Lighthouse
+    const buildLighthouse = () => {
+      const b = new Group();
+      b.name = "SeasideLighthouse";
+
+      // Stone Jetty Foundation
+      const jetty = box(5.4, 0.8, 5.4, "#64748b", 0.9, 0.1);
+      jetty.position.y = 0.4;
+      b.add(jetty);
+
+      // Tapered tower sections (alternating red and white)
+      const t1 = box(3.2, 2.0, 3.2, "#dc2626", 0.8, 0.1);
+      t1.position.y = 1.8;
+      const t2 = box(2.8, 2.0, 2.8, "#f8fafc", 0.8, 0.1);
+      t2.position.y = 3.8;
+      const t3 = box(2.4, 2.0, 2.4, "#dc2626", 0.8, 0.1);
+      t3.position.y = 5.8;
+      const t4 = box(2.0, 1.8, 2.0, "#f8fafc", 0.8, 0.1);
+      t4.position.y = 7.7;
+      b.add(t1, t2, t3, t4);
+
+      // Observation Balcony / Gallery
+      const gal = box(2.7, 0.22, 2.7, "#334155", 0.7, 0.3);
+      gal.position.y = 8.7;
+      const rail = box(2.7, 0.55, 2.7, "#475569", 0.7, 0.2);
+      rail.position.y = 9.0;
+      rail.scale.set(0.95, 1, 0.95);
+      b.add(gal, rail);
+
+      // Glass Lantern Room & Beacon Light
+      const glassRoom = box(1.5, 1.3, 1.5, "#bae6fd", 0.2, 0.8);
+      glassRoom.position.y = 9.45;
+      const beaconLight = sphere(0.55, 8, 8, "#fffbeb", 0.2, 0.1, "#fef08a", 1.2);
+      beaconLight.position.y = 9.45;
+      b.add(glassRoom, beaconLight);
+
+      // Lantern Dome & Spire
+      const dome = box(1.7, 0.45, 1.7, "#1e293b", 0.7, 0.3);
+      dome.position.y = 10.3;
+      const spire = box(0.12, 1.2, 0.12, "#fcd34d", 0.4, 0.6);
+      spire.position.y = 11.0;
+      b.add(dome, spire);
+
+      return b;
+    };
+    const gLight = placeOnSphere([19.2, 13.8, 14.8], -0.5);
+    gLight.add(buildLighthouse());
+    worldGroup.add(gLight);
+
+    // Building 3: Sacred Zen Mountain Pagoda & Tea Pavilion
+    const buildPagoda = () => {
+      const b = new Group();
+      b.name = "ZenMountainPagoda";
+
+      // Dark timber platform
+      const base = box(4.6, 0.6, 4.6, "#451a03", 0.9, 0.1);
+      base.position.y = 0.3;
+      const stairs = box(1.6, 0.3, 1.0, "#78350f", 0.9, 0.1);
+      stairs.position.set(0, 0.15, 2.6);
+      b.add(base, stairs);
+
+      // Vermilion Pillars (4 corners)
+      const pOff = 1.6;
+      for (const px of [pOff, -pOff]) {
+        for (const pz of [pOff, -pOff]) {
+          const col = box(0.24, 2.6, 0.24, "#b91c1c", 0.7, 0.2);
+          col.position.set(px, 1.9, pz);
+          b.add(col);
+        }
+      }
+
+      // Lower Pagoda Roof
+      const r1 = box(4.8, 0.26, 4.8, "#14532d", 0.7, 0.1);
+      r1.position.y = 3.25;
+      const r1c = box(5.2, 0.08, 5.2, "#166534", 0.7, 0.1);
+      r1c.position.y = 3.32;
+      b.add(r1, r1c);
+
+      // Upper Shrine chamber
+      const chamber = box(2.6, 1.8, 2.6, "#fef3c7", 0.8, 0.05);
+      chamber.position.set(0, 4.25, 0);
+      b.add(chamber);
+
+      // Upper Pagoda Roof
+      const r2 = box(3.6, 0.28, 3.6, "#14532d", 0.7, 0.1);
+      r2.position.y = 5.25;
+      const r2c = box(4.0, 0.08, 4.0, "#166534", 0.7, 0.1);
+      r2c.position.y = 5.32;
+      b.add(r2, r2c);
+
+      // Gilded Spire Finial
+      const finial = box(0.14, 1.1, 0.14, "#f59e0b", 0.3, 0.7);
+      finial.position.y = 6.0;
+      const finBall = sphere(0.28, 6, 6, "#fbbf24", 0.3, 0.7);
+      finBall.position.y = 6.5;
+      b.add(finial, finBall);
+
+      // Glowing Shoji Paper Lanterns
+      for (const lx of [1.4, -1.4]) {
+        const lant = box(0.35, 0.45, 0.35, "#fffbeb", 0.4, 0.1, "#fde047", 0.8);
+        lant.position.set(lx, 2.5, 1.6);
+        b.add(lant);
+      }
+
+      // Stone Garden Bench
+      const bench = box(1.6, 0.4, 0.6, "#78716c", 0.9, 0.1);
+      bench.position.set(0, 0.8, -1.2);
+      b.add(bench);
+
+      return b;
+    };
+    const gPagoda = placeOnSphere([-13.5, 30.2, 3.2], 2.0);
+    gPagoda.add(buildPagoda());
+    worldGroup.add(gPagoda);
+
+    // Building 4: Forester Ranger Lodge & Lookout
+    const buildRangerLodge = () => {
+      const b = new Group();
+      b.name = "RangerLodge";
+
+      // Log cabin main structure
+      const cabin = box(4.2, 2.4, 3.6, "#5c3d2e", 0.9, 0.1);
+      cabin.position.set(0, 1.4, -0.3);
+      b.add(cabin);
+
+      // Front porch
+      const deck = box(4.2, 0.25, 1.5, "#78350f", 0.9, 0.1);
+      deck.position.set(0, 0.3, 1.8);
+      const post1 = box(0.16, 2.1, 0.16, "#5c3d2e");
+      post1.position.set(1.8, 1.3, 2.3);
+      const post2 = box(0.16, 2.1, 0.16, "#5c3d2e");
+      post2.position.set(-1.8, 1.3, 2.3);
+      b.add(deck, post1, post2);
+
+      // Mossy Shingle Roof
+      const rL = box(4.6, 0.25, 2.6, "#365314", 0.8, 0.1);
+      rL.position.set(0, 2.9, 0.5);
+      rL.rotation.x = 0.4;
+      const rR = box(4.6, 0.25, 2.6, "#365314", 0.8, 0.1);
+      rR.position.set(0, 2.9, -1.1);
+      rR.rotation.x = -0.4;
+      b.add(rL, rR);
+
+      // Stone Fireplace & Chimney
+      const chim = box(0.8, 3.6, 0.8, "#475569", 0.9, 0.1);
+      chim.position.set(-1.6, 1.9, -1.4);
+      b.add(chim);
+
+      // Stacked Firewood logs
+      const woodPile = box(1.2, 0.65, 0.6, "#854d0e", 0.9, 0.05);
+      woodPile.position.set(-1.6, 0.6, 1.8);
+      b.add(woodPile);
+
+      // Warm Cabin Windows
+      const win = box(0.8, 0.7, 0.12, "#fffbe0", 0.3, 0.1, "#fcd34d", 0.5);
+      win.position.set(1.0, 1.6, 1.52);
+      b.add(win);
+
+      return b;
+    };
+    const gRanger = placeOnSphere([-7.5, -22.2, 8.8], 1.3);
+    gRanger.add(buildRangerLodge());
+    worldGroup.add(gRanger);
+
+    // Building 5: Capital Corp High-Tech Drone Station
+    const buildDroneStation = () => {
+      const b = new Group();
+      b.name = "CapitalDroneStation";
+
+      // Tech Pod Main Unit
+      const pod = box(4.0, 2.2, 4.0, "#f1f5f9", 0.6, 0.3);
+      pod.position.y = 1.3;
+      b.add(pod);
+
+      // Glowing Cyan Seam Line
+      const seam = box(4.06, 0.1, 4.06, "#06b6d4", 0.3, 0.1, "#22d3ee", 0.9);
+      seam.position.y = 1.3;
+      b.add(seam);
+
+      // Rooftop Drone Helipad
+      const pad = box(3.4, 0.16, 3.4, "#334155", 0.8, 0.2);
+      pad.position.y = 2.45;
+      const padH1 = box(0.2, 0.2, 1.6, "#facc15", 0.5, 0.2);
+      padH1.position.set(-0.6, 2.5, 0);
+      const padH2 = box(0.2, 0.2, 1.6, "#facc15", 0.5, 0.2);
+      padH2.position.set(0.6, 2.5, 0);
+      const padH3 = box(1.0, 0.2, 0.2, "#facc15", 0.5, 0.2);
+      padH3.position.set(0, 2.5, 0);
+      b.add(pad, padH1, padH2, padH3);
+
+      // Solar Wings (Left & Right)
+      const solL = box(2.4, 0.08, 1.4, "#1e3a8a", 0.2, 0.8);
+      solL.position.set(2.8, 1.8, 0);
+      solL.rotation.z = -0.35;
+      const solR = box(2.4, 0.08, 1.4, "#1e3a8a", 0.2, 0.8);
+      solR.position.set(-2.8, 1.8, 0);
+      solR.rotation.z = 0.35;
+      b.add(solL, solR);
+
+      // Comms Antenna & Warning Beacon
+      const ant = box(0.1, 2.6, 0.1, "#94a3b8", 0.5, 0.5);
+      ant.position.set(1.4, 3.6, 1.4);
+      const beacon = sphere(0.2, 6, 6, "#ef4444", 0.3, 0.1, "#f87171", 1.2);
+      beacon.position.set(1.4, 4.9, 1.4);
+      b.add(ant, beacon);
+
+      return b;
+    };
+    const gDrone = placeOnSphere([-9.8, -5.2, -21.5], -2.1);
+    gDrone.add(buildDroneStation());
+    worldGroup.add(gDrone);
+
+    // ==========================================
+    // 3. ROAD NETWORKS & PAVED PATHWAYS
+    // ==========================================
+    const buildRoadAlong = (points, width, length, col, colAlt = null, addCenterStripe = false) => {
+      for (let i = 0; i < points.length; i++) {
+        const p = points[i];
+        let angle = 0;
+        if (i < points.length - 1) {
+          const next = points[i + 1];
+          angle = Math.atan2(next[0] - p[0], next[2] - p[2]);
+        } else if (i > 0) {
+          const prev = points[i - 1];
+          angle = Math.atan2(p[0] - prev[0], p[2] - prev[2]);
+        }
+        const g = placeOnSphere(p, angle);
+        const slabCol = (colAlt && i % 2 === 1) ? colAlt : col;
+        const slab = box(width, 0.1, length, slabCol, 0.9, 0.1);
+        slab.position.y = 0.05;
+        g.add(slab);
+
+        if (addCenterStripe && i % 2 === 0) {
+          const stripe = box(width * 0.12, 0.12, length * 0.6, "#facc15", 0.7, 0.2);
+          stripe.position.y = 0.06;
+          g.add(stripe);
+        }
+        worldGroup.add(g);
+      }
+    };
+
+    // Road 1: Town Cobblestone Promenade (Plaza towards Post Office)
+    const townRoadPoints = [
+      [27.8, 2.2, 1.4], [27.6, 3.1, 2.2], [27.3, 4.0, 3.0],
+      [26.9, 4.7, 4.0], [26.4, 5.3, 5.0], [25.8, 5.8, 6.0]
+    ];
+    buildRoadAlong(townRoadPoints, 1.8, 0.95, "#a8a29e", "#78716c", false);
+
+    // Road 2: Seaside Timber Boardwalk (Beach towards Lighthouse Jetty)
+    const seasideBoardwalkPoints = [
+      [16.2, 16.4, 11.8], [17.0, 15.6, 12.6], [17.8, 14.8, 13.4],
+      [18.5, 14.2, 14.1], [19.2, 13.8, 14.8]
+    ];
+    buildRoadAlong(seasideBoardwalkPoints, 2.0, 0.9, "#9c6644", "#854d0e", false);
+
+    // Road 3: Mountain Pilgrim Flagstone Steps (Ascending to Pagoda)
+    const mountainTrailPoints = [
+      [-10.2, 27.2, 2.2], [-11.0, 28.0, 2.5], [-11.8, 28.8, 2.8],
+      [-12.6, 29.5, 3.0], [-13.4, 30.1, 3.2]
+    ];
+    buildRoadAlong(mountainTrailPoints, 1.6, 0.85, "#64748b", "#475569", false);
+
+    // Road 4: Capital Industrial Strip (Lab towards Drone Station)
+    const industrialRoadPoints = [
+      [-7.4, -8.2, -19.0], [-8.2, -7.2, -19.8], [-9.0, -6.2, -20.6], [-9.8, -5.2, -21.4]
+    ];
+    buildRoadAlong(industrialRoadPoints, 2.2, 1.0, "#334155", null, true);
+
+    // ==========================================
+    // 4. EXPANDED HANDCRAFTED FORESTS & GROVES
+    // ==========================================
+
+    // Tree Builder: Whispering Conifer Pine
+    const buildPineTree = (hScale = 1.0) => {
+      const tree = new Group();
+      const trunkH = 1.8 * hScale;
+      const trunk = box(0.38 * hScale, trunkH, 0.38 * hScale, "#5c3d2e", 0.9, 0.1);
+      trunk.position.y = trunkH / 2;
+      tree.add(trunk);
+
+      // Layered pine foliage tiers
+      const tiers = [
+        { y: trunkH * 0.9, w: 2.2 * hScale, h: 1.1 * hScale, col: "#1e3a1e" },
+        { y: trunkH * 1.3, w: 1.7 * hScale, h: 0.95 * hScale, col: "#2d5a27" },
+        { y: trunkH * 1.65, w: 1.2 * hScale, h: 0.85 * hScale, col: "#36642f" },
+        { y: trunkH * 1.95, w: 0.65 * hScale, h: 0.7 * hScale, col: "#417d38" }
+      ];
+      for (const t of tiers) {
+        const m1 = box(t.w, t.h, t.w, t.col, 0.85, 0.05);
+        m1.position.y = t.y;
+        const m2 = box(t.w, t.h, t.w, t.col, 0.85, 0.05);
+        m2.position.y = t.y;
+        m2.rotation.y = 0.785; // 45 degree rotation creates 8-faceted evergreen crown
+        tree.add(m1, m2);
+      }
+      return tree;
+    };
+
+    // Tree Builder: Sakura Blossom Cherry Tree
+    const buildSakuraTree = (hScale = 1.0) => {
+      const tree = new Group();
+      const trunkH = 2.0 * hScale;
+      const trunk = box(0.42 * hScale, trunkH, 0.42 * hScale, "#3e2723", 0.9, 0.1);
+      trunk.position.y = trunkH / 2;
+      const branch = box(0.24 * hScale, 1.0 * hScale, 0.24 * hScale, "#3e2723", 0.9, 0.1);
+      branch.position.set(0.3 * hScale, trunkH * 0.8, 0);
+      branch.rotation.z = -0.5;
+      tree.add(trunk, branch);
+
+      // Fluffy pastel cloud foliage
+      const c1 = sphere(1.2 * hScale, 6, 6, "#f472b6", 0.85, 0.05);
+      c1.position.set(0, trunkH + 0.5 * hScale, 0);
+      const c2 = sphere(0.9 * hScale, 6, 6, "#fbcfe8", 0.85, 0.05);
+      c2.position.set(0.6 * hScale, trunkH + 0.6 * hScale, 0.3 * hScale);
+      const c3 = sphere(0.85 * hScale, 6, 6, "#f9a8d4", 0.85, 0.05);
+      c3.position.set(-0.5 * hScale, trunkH + 0.4 * hScale, -0.4 * hScale);
+      tree.add(c1, c2, c3);
+
+      // Fallen petal mound on the grass
+      const petals = box(1.8 * hScale, 0.04, 1.8 * hScale, "#fbcfe8", 0.9, 0.05);
+      petals.position.y = 0.02;
+      petals.rotation.y = 0.4;
+      tree.add(petals);
+
+      return tree;
+    };
+
+    // Tree Builder: Seaside Tropical Palm
+    const buildPalmTree = (hScale = 1.0) => {
+      const tree = new Group();
+      // Curved trunk segments
+      let curY = 0;
+      let curZ = 0;
+      for (let i = 0; i < 5; i++) {
+        const seg = box(0.36 * hScale, 0.7 * hScale, 0.36 * hScale, "#854d0e", 0.9, 0.1);
+        seg.position.set(0, curY + 0.35 * hScale, curZ);
+        seg.rotation.x = -0.1 * i;
+        tree.add(seg);
+        curY += 0.6 * hScale;
+        curZ += 0.15 * hScale * i;
+      }
+      // Coconuts
+      for (const cx of [-0.2, 0.2, 0]) {
+        const coc = sphere(0.2 * hScale, 5, 5, "#451a03", 0.9, 0.1);
+        coc.position.set(cx * hScale, curY, curZ + 0.1 * hScale);
+        tree.add(coc);
+      }
+      // Radiating palm fronds
+      for (let i = 0; i < 6; i++) {
+        const frond = box(0.35 * hScale, 0.08 * hScale, 2.0 * hScale, "#15803d", 0.8, 0.1);
+        frond.position.set(0, curY + 0.1 * hScale, curZ);
+        frond.rotation.y = (i * Math.PI) / 3;
+        frond.rotation.x = 0.35;
+        tree.add(frond);
+      }
+      return tree;
+    };
+
+    // Tree Builder: Autumn Golden Grove Tree
+    const buildAutumnTree = (hScale = 1.0) => {
+      const tree = new Group();
+      const trunkH = 2.0 * hScale;
+      const trunk = box(0.44 * hScale, trunkH, 0.44 * hScale, "#422006", 0.9, 0.1);
+      trunk.position.y = trunkH / 2;
+      tree.add(trunk);
+
+      // Multi-tier golden amber foliage
+      const f1 = box(2.0 * hScale, 1.4 * hScale, 2.0 * hScale, "#ea580c", 0.85, 0.05);
+      f1.position.y = trunkH + 0.5 * hScale;
+      const f2 = box(1.6 * hScale, 1.3 * hScale, 1.6 * hScale, "#f59e0b", 0.85, 0.05);
+      f2.position.set(0.3 * hScale, trunkH + 0.9 * hScale, 0);
+      f2.rotation.y = 0.4;
+      const f3 = box(1.3 * hScale, 1.1 * hScale, 1.3 * hScale, "#eab308", 0.85, 0.05);
+      f3.position.set(-0.2 * hScale, trunkH + 1.2 * hScale, 0.2 * hScale);
+      tree.add(f1, f2, f3);
+      return tree;
+    };
+
+    // Grove 1: Whispering Pines (Forest Biome - 14 trees)
+    const pineForestCoords = [
+      { pos: [-6.8, -21.0, 7.5], s: 1.15, r: 0.3 },
+      { pos: [-8.8, -22.5, 9.8], s: 0.95, r: 1.1 },
+      { pos: [-5.5, -23.0, 5.8], s: 1.25, r: 2.1 },
+      { pos: [-10.2, -20.5, 8.2], s: 1.05, r: 0.7 },
+      { pos: [-7.2, -23.8, 6.2], s: 0.85, r: 2.9 },
+      { pos: [-9.5, -21.8, 11.2], s: 1.3, r: 1.5 },
+      { pos: [-11.0, -19.5, 9.5], s: 1.0, r: 0.4 },
+      { pos: [-6.0, -22.0, 10.5], s: 1.1, r: 2.4 },
+      { pos: [-8.2, -24.2, 4.5], s: 0.9, r: 1.8 },
+      { pos: [-10.5, -23.0, 6.8], s: 1.2, r: 0.9 },
+      { pos: [-5.0, -21.5, 8.0], s: 0.95, r: 2.6 },
+      { pos: [-11.8, -21.0, 7.8], s: 1.1, r: 1.3 },
+      { pos: [-7.8, -20.2, 6.0], s: 1.0, r: 3.1 },
+      { pos: [-9.0, -24.0, 8.5], s: 1.2, r: 0.2 }
+    ];
+    for (const pt of pineForestCoords) {
+      const g = placeOnSphere(pt.pos, pt.r);
+      g.add(buildPineTree(pt.s));
+      worldGroup.add(g);
+    }
+
+    // Woodland Details: Red toadstools & mossy boulders in the pine forest
+    const mushroomLocs = [
+      [-7.2, -21.4, 8.2], [-8.4, -22.0, 10.4], [-6.4, -22.8, 6.8], [-10.0, -21.2, 7.5]
+    ];
+    for (const mPos of mushroomLocs) {
+      const g = placeOnSphere(mPos, 0.5);
+      const cap = sphere(0.24, 6, 6, "#ef4444", 0.6, 0.1);
+      cap.position.y = 0.35;
+      const stem = box(0.12, 0.35, 0.12, "#f8fafc", 0.9, 0.05);
+      stem.position.y = 0.18;
+      const rock = box(0.65, 0.45, 0.7, "#64748b", 0.9, 0.1);
+      rock.position.set(0.4, 0.2, 0.2);
+      g.add(stem, cap, rock);
+      worldGroup.add(g);
+    }
+
+    // Grove 2: Sacred Sakura Orchard (Mountain Biome - 8 trees)
+    const sakuraCoords = [
+      { pos: [-7.0, 31.5, 0.5], s: 1.1, r: 0.5 },
+      { pos: [-9.5, 32.0, -3.2], s: 1.2, r: 1.8 },
+      { pos: [-11.2, 30.8, -1.0], s: 0.95, r: 2.5 },
+      { pos: [-6.5, 32.5, -2.5], s: 1.0, r: 0.9 },
+      { pos: [-12.5, 29.5, 1.8], s: 1.25, r: 1.4 },
+      { pos: [-8.8, 30.5, 2.2], s: 1.05, r: 2.8 },
+      { pos: [-10.8, 31.8, -2.0], s: 1.15, r: 0.2 },
+      { pos: [-14.2, 29.0, 2.5], s: 0.9, r: 3.0 }
+    ];
+    for (const st of sakuraCoords) {
+      const g = placeOnSphere(st.pos, st.r);
+      g.add(buildSakuraTree(st.s));
+      worldGroup.add(g);
+    }
+
+    // Grove 3: Seaside Palm Oasis (Beach Biome - 7 trees)
+    const palmCoords = [
+      { pos: [14.8, 17.5, 10.5], s: 1.15, r: -0.4 },
+      { pos: [16.8, 16.5, 12.0], s: 1.0, r: -1.2 },
+      { pos: [18.5, 15.0, 13.0], s: 1.25, r: 0.6 },
+      { pos: [15.2, 18.2, 9.2], s: 0.95, r: -0.8 },
+      { pos: [17.5, 15.8, 11.5], s: 1.1, r: 1.5 },
+      { pos: [19.0, 14.5, 13.8], s: 1.2, r: -2.0 },
+      { pos: [14.0, 18.8, 8.5], s: 1.05, r: 0.3 }
+    ];
+    for (const pt of palmCoords) {
+      const g = placeOnSphere(pt.pos, pt.r);
+      g.add(buildPalmTree(pt.s));
+      worldGroup.add(g);
+    }
+
+    // Grove 4: Autumn Golden Woods (Falls / Canyon Biome - 6 trees)
+    const autumnCoords = [
+      { pos: [14.2, -15.5, -7.8], s: 1.2, r: 0.6 },
+      { pos: [16.0, -14.2, -9.5], s: 1.05, r: 1.7 },
+      { pos: [13.0, -16.8, -6.5], s: 1.25, r: 2.4 },
+      { pos: [15.5, -15.0, -8.2], s: 0.95, r: -0.8 },
+      { pos: [17.2, -13.0, -10.2], s: 1.1, r: 1.1 },
+      { pos: [13.8, -17.2, -5.8], s: 1.15, r: -1.9 }
+    ];
+    for (const at of autumnCoords) {
+      const g = placeOnSphere(at.pos, at.r);
+      g.add(buildAutumnTree(at.s));
+      worldGroup.add(g);
+    }
+
+    // Add complete world expansion to the main scene
+    this.add(worldGroup);
+    console.log("[Cold World] World Expansion successfully initialized: 5 delivery vans, 5 buildings, 4 paved roads, 35+ trees & flora.");
+  } catch (err) {
+    console.error("[Cold World] Error initializing world expansion:", err);
+  }
+}
+initQuests(){this.questsController=new questsController(this)}playInAnimation(){const e=this.npcs.find(i=>{var s;return((s=i.mesh)==null?void 0:s._id)==="musician"});return e&&events$1.emit("webgl_play_positional","dialogue-music-dave",e.mesh,.1,0,!1),events$1.on("npc_talk_update",({id:i,object:s,talking:a})=>{i==="musician"&&(a?events$1.emit("webgl_stop_positional","dialogue-music-dave"):events$1.emit("webgl_play_positional","dialogue-music-dave",s,.1,0,!1))}),super.playInAnimation()}}const _obj$1=new Object3D,_obj2=new Object3D,mapping=[{accessory:"shoes",action:-1},{accessory:"shoes",action:1},{accessory:"bottom",action:-1},{accessory:"bottom",action:1},{accessory:"top",action:-1},{accessory:"top",action:1},{accessory:"hair",action:-1},{accessory:"hair",action:1}],size=.175,baseGeo1=new PlaneGeometry(size,size),baseGeo2=new PlaneGeometry(size,size),baseGeo=mergeGeometries([baseGeo1,baseGeo2]);baseGeo.setAttribute("side",new BufferAttribute(new Int32Array([1,1,1,1,0,0,0,0]),1));baseGeo.setAttribute("vertid",new BufferAttribute(new Int32Array([1,2,3,4,1,2,3,4]),1));class traitarrows{constructor(e){this.scene=e,this.shown=!1,this.lastTouched=0,this.offsetX=.5,this.offsetXArrow=.5075,this.baseY=.1,this.offsetY=.46,this.closeY=1.9,this.ready=miscutils.deferred(),this.init()}async init(){const e=new InstancedBufferGeometry;e.instanceCount=9;for(const _ in baseGeo.attributes)e.setAttribute(_,baseGeo.attributes[_]);e.setIndex(baseGeo.index),e.setAttribute("hover",new InstancedBufferAttribute(new Float32Array(e.instanceCount).fill(0),1)),e.setAttribute("scaleHover",new InstancedBufferAttribute(new Float32Array(e.instanceCount).fill(1),1)),e._animObjs=[];for(let _=0;_<e.instanceCount;_++)e._animObjs.push({hover:0,scaleHover:1});const i=new ShaderMaterial({uniformsGroups:[global$1.UBO],uniforms:{uColor:{value:new Color("#F8F8F8")},uColorShadow:{value:new Color("#647A87")},uSeed:{value:Math.random()},uShow:{value:0},uShadowOffset:{value:.01175}},vertexShader:`
                 attribute float hover;
                 attribute float scaleHover;
                 attribute int side;
