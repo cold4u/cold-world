@@ -11150,6 +11150,97 @@ _addOwl("owl-cliff",[-6.2,-1.8,25.1],"Cliff Owl",["Hoo... The boss paces on this
 _addScout("scout-lab",[-9.2,-5.8,-19.8],"Junior Tim",["Dr. Frebi gave me my very own visitor lab badge!","We are measuring how gravity bends around our spherical world!","Science makes the impossible possible!"],"male1","#66BDE6");
 _addFox("fox-lab",[2.5,6.1,-23.2],"Sneaky Fox",["*peeks curiously from behind the tech crates*","Yip! *curiously taps a glowing cable*","*scampers into the shadows*"],"male3","#66BDE6");
 
+const _addChar = (id, model, idleAnim, pos, name, texts, voice, color, bOff = [0, .6, 0], iconOff = [0, .15, 0], talkDist = 2.8) => {
+  const p = _snapG(pos), r = _orientG(p);
+  this.npcs.push(new npc(this, {
+    id: id,
+    modelURL: "npcs/present/" + model + "/" + model + ".drc",
+    bonesURL: "npcs/present/" + model + "/" + model + "-bones.drc",
+    animations: [
+      "npcs/present/" + model + "/" + idleAnim + ".drc",
+      "npcs/present/" + model + "/" + idleAnim + ".drc",
+      "npcs/present/" + model + "/" + idleAnim + ".drc",
+      "npcs/present/" + model + "/" + idleAnim + ".drc"
+    ],
+    animationsOptions: [{speed: 1}, {speed: 1}, {speed: 1}, {speed: 1}],
+    talkEnabled: true,
+    talkFacingPlayer: true,
+    alwaysFaceCharacter: false,
+    texts: texts,
+    position: p,
+    rotation: r,
+    textsBubblesOffset: bOff,
+    visibilityThreshold: 26,
+    icon: true,
+    iconOffset: iconOff,
+    talkDistance: talkDist,
+    extraData: { name: name, color: color, voice: voice }
+  }));
+};
+
+// --- Delivery Van Couriers ---
+_addChar("driver-plaza", "office-worker", "office-worker-idle", [27.6, 3.6, 2.6], "Courier Leo", [
+  "Cold World Express Van #01 is fueled up and ready to roll!",
+  "We've got 24 packages scheduled for delivery around Town Plaza.",
+  "Keep up the great pace, courier!"
+], "male1", "#1d4ed8", [0, .6, 0], [0, .15, 0], 3.2);
+
+_addChar("driver-lab", "factory-worker-a", "factory-worker-a-idle", [-7.8, -9.5, -17.2], "Driver Otto", [
+  "Heavy Cargo Van #04 reporting for duty.",
+  "We're transporting sensitive quantum battery cells from Dr. Frebi's lab.",
+  "Watch the turns on these spherical roads when carrying heavy freight!"
+], "male3", "#0e7490", [0, .6, 0], [0, .15, 0], 3.2);
+
+_addChar("driver-beach", "young-lady", "young-lady-idle", [17.5, 16.2, 12.2], "Courier Kai", [
+  "Surf's up! Welcome to Beach Delivery Station #07.",
+  "Delivering fresh coconuts and mail to Captain Steve down by the dock.",
+  "Make sure to seal your courier satchel against the ocean spray!"
+], "female1", "#0284c7", [0, .6, 0], [0, .15, 0], 3.2);
+
+_addChar("driver-mountain", "mountainman", "mountainman-idle", [-10.6, 28.8, 2.2], "Expedition Maya", [
+  "Mountain Supply Van #03 all geared up for high altitude!",
+  "The switchback trail to the Zen Pagoda is steep—use your sprint wisely.",
+  "Cold World delivers everywhere, even to the highest mountain peaks!"
+], "female2", "#15803d", [0, .6, 0], [0, .15, 0], 3.2);
+
+_addChar("driver-falls", "chef", "chef-idle", [15.6, -13.8, -8.2], "Camp Courier Rusty", [
+  "Van #05 is parked right by the campfire near Smelly Falls!",
+  "Nothing beats an acoustic guitar jam after a long day of deliveries.",
+  "Grab a warm roasted trail snack if you need an energy boost!"
+], "male2", "#c2410c", [0, .6, 0], [0, .15, 0], 3.2);
+
+// --- Building Keepers & Stationmasters ---
+_addChar("keeper-postal", "young-lady", "young-lady-idle", [25.0, 5.6, 7.0], "Stationmaster Penny", [
+  "Welcome to the Cold World Central Post Office!",
+  "You can drop outgoing letters and parcels into the red pillar box out front.",
+  "Thank you for keeping all seven biomes of our planet connected!"
+], "female3", "#3b82f6", [0, .6, 0], [0, .15, 0], 3.0);
+
+_addChar("keeper-lighthouse", "diver", "diver-idle", [18.8, 14.4, 14.2], "Keeper Barnaby", [
+  "Ahoy, courier! The lighthouse beacon guides navigators across the starry void.",
+  "On clear nights, you can see the whole curvature of the planet glowing.",
+  "The coastal breeze keeps our rotating lantern cool and spinning true."
+], "male3", "#de794e", [0, .6, 0], [0, .15, 0], 3.0);
+
+_addChar("keeper-pagoda", "oldwoman", "oldwoman-idle", [-12.8, 30.2, 3.8], "Master Sora", [
+  "Peace to you, traveler. The mountain air brings stillness to the mind.",
+  "Listen to the wind chimes dancing under the pagoda roof eaves.",
+  "Every journey around the world begins with a single step."
+], "female1", "#10b981", [0, .6, 0], [0, .15, 0], 3.0);
+
+_addChar("keeper-ranger", "scout", "scout-idle", [-7.0, -22.0, 9.6], "Ranger Rowan", [
+  "Welcome to the Whispering Pines Ranger Station!",
+  "Keep an eye out for playful foxes darting through the underbrush.",
+  "Take care of the forest trees, and the forest will take care of you."
+], "male1", "#84cc16", [0, .6, 0], [0, .15, 0], 3.0);
+
+_addChar("keeper-drone", "male-scientist", "male-scientist-idle", [-9.2, -5.6, -20.8], "Officer Jax", [
+  "Capital Corp Automated Drone Delivery Relay is online and synchronized.",
+  "Dual photovoltaic wings are actively charging our electric van fleet.",
+  "Telemetry indicates zero packet loss and 100% on-time delivery across all sectors!"
+], "male1", "#06b6d4", [0, .6, 0], [0, .15, 0], 3.0);
+
+
 this.createWorldExpansion();
 await Promise.all(this.npcs.map(e=>e.ready))}
 createWorldExpansion(){

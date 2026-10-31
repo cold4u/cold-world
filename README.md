@@ -22,13 +22,18 @@ A 3D spherical low-poly planet delivery adventure built with Three.js and Svelte
   - **Interactive Children**: Scouts earning badges, shell-gatherers, mountain climbers, and tech lab apprentices with full speech bubbles and voice blips.
   - **Flocks of Soaring Birds**: Over 90 birds gliding on spherical air currents across the sky.
 - **World Expansion & Infrastructure**:
-  - **Cold World Express Delivery Vans**: Fleet of 5 branded, low-poly delivery vans across the planet (Town Plaza Express #01, Capital Heavy Cargo #04, Seaside Beach Runner #07, Mountain High Expedition #03, Canyon Trail Camper #05) complete with chassis, rubber tires, silver hubcaps, windshields, headlights with emissive glow, taillights, roof parcel racks, and packages.
-  - **5 New Architectural Landmarks**:
-    - *Town Postal Station & Mailbox*: Central depot with gabled roof, front porch awning, warm lit windows, and iconic red postal drop box.
-    - *Seaside Beacon Lighthouse*: Red-and-white nautical beacon tower, stone sea-wall jetty foundation, revolving lantern room, and observation gallery.
-    - *Sacred Zen Mountain Pagoda & Tea Pavilion*: Multi-tiered jade green pagoda roofs, vermilion pillars, glowing shoji paper lanterns, and stone garden bench.
-    - *Forester Ranger Lodge & Lookout*: Log cabin styling with moss-shake gabled roof, fieldstone chimney, covered front veranda, and stacked split-wood logs.
-    - *Capital Corp Drone Station*: Modular hexagonal tech pod with glowing cyan seam lines, rooftop helipad with hazard chevrons, dual solar panel wings, and comms antenna mast.
+  - **Cold World Express Delivery Vans & Couriers**: Fleet of 5 branded, low-poly delivery vans across the planet with designated courier drivers and full game UI dialogue:
+    - *Express #01 & Courier Leo (Town Plaza)*: Royal Blue delivery van and town dispatcher with route updates.
+    - *Heavy Cargo #04 & Driver Otto (Capital Corp)*: High-voltage industrial hauler transporting quantum batteries.
+    - *Beach Runner #07 & Courier Kai (Seaside)*: Sky Blue surf van delivering coastal mail to the pier.
+    - *Expedition #03 & Courier Maya (Mountain)*: High-altitude van preparing for steep switchback climbs.
+    - *Camp Camper #05 & Courier Rusty (Smelly Falls)*: Canyon trail camper van sharing roasted campfire snacks.
+  - **5 Interactive Architectural Landmarks & Keepers**:
+    - *Town Postal Station & Stationmaster Penny*: Gabled blue depot with red drop box and central shipping registry.
+    - *Seaside Beacon Lighthouse & Keeper Barnaby*: Nautical beacon tower guiding ships through the starry cosmos.
+    - *Sacred Zen Mountain Pagoda & Master Sora*: Jade green pagoda shrine offering peaceful mountain wisdom.
+    - *Forester Ranger Lodge & Ranger Rowan*: Woodland log cabin watching over wildlife and forest canopies.
+    - *Capital Corp Drone Station & Officer Jax*: Hexagonal drone relay pod with live solar telemetry.
   - **4 Paved Road Networks**:
     - *Town Cobblestone Promenade*: Interconnected paving slabs with stone curbs connecting the plaza to the postal station.
     - *Seaside Timber Boardwalk*: Nautical timber plankway extending towards the lighthouse jetty.
