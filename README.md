@@ -1,4 +1,4 @@
-# 🪐 Messenger - 3D Planet Delivery Game
+# 🪐 Cold World - 3D Planet Delivery Game
 
 > *"It's a small planet, but someone's gotta make the deliveries."*
 
