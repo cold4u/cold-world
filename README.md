@@ -3,7 +3,7 @@
 > *"It's a small planet, but someone's gotta make the deliveries."*
 
 **Hosted and maintained by [cold4u](https://github.com/cold4u)**  
-🎮 **Play Online**: [https://cold4u.github.io/messenger-planet/](https://cold4u.github.io/messenger-planet/)
+🎮 **Play Online**: [https://cold4u.github.io/cold-world/](https://cold4u.github.io/cold-world/)
 
 A 3D spherical low-poly planet delivery adventure built with Three.js and Svelte.
 
