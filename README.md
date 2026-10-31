@@ -2,13 +2,16 @@
 
 > *"It's a small planet, but someone's gotta make the deliveries."*
 
-A 3D spherical low-poly planet delivery adventure built with Three.js, inspired by [messenger.abeto.co](https://messenger.abeto.co/).
+**Hosted and maintained by [cold4u](https://github.com/cold4u)**  
+🎮 **Play Online**: [https://cold4u.github.io/messenger-planet/](https://cold4u.github.io/messenger-planet/)
 
-## 🎮 Features
+A 3D spherical low-poly planet delivery adventure built with Three.js and Svelte.
+
+## 🌟 Features
 - **Spherical Surface Gravity**: Full 360° navigation where your character always aligns perpendicularly to the planet's curvature.
-- **7 Unique Biomes**:
+- **7 Detailed Biomes**:
   - Main Square (Town Plaza, Flower Stalls, Fountain)
-  - Red Cliff House (Executive Villa & Flagpole)
+  - Red Cliff House (The Boss's Executive Villa)
   - Mount Temple (Torii Gate, Cherry Blossoms, Mountain Shrine)
   - Enchanted Forest & Cave (Pine trees, Campfire, Cave entrance)
   - Smelly Falls (Waterfall canyon, Wooden dock)
@@ -20,14 +23,14 @@ A 3D spherical low-poly planet delivery adventure built with Three.js, inspired 
   3. *Scientists & mixed-up deliveries* (Dr. Frieb & Dr. Frebi)
   4. *An offering to the mountain temple* (Old Woman & Mountain Man)
   5. *A note lost at sea* (The Diver & Dave the Musician)
-- **Audio & Ambiance**:
-  - Official background music streamed from `messenger.abeto.co` with Web Audio procedural synth fallback.
-  - Animal Crossing style voice chatter sounds with pitch variation.
-  - Sound effects for jumps, footsteps, pickup chimes, and victory fanfares.
+- **Original Audio & Ambiance**:
+  - High-fidelity background soundtrack and atmospheric soundscapes.
+  - Animal Crossing style speech voice blips with pitch variations.
+  - Responsive footstep, jump, and victory sound effects.
 - **Customization & UI**:
-  - Courier outfit customizer (uniform colors, caps, satchel/backpack).
-  - Delivery checklist log modal (`[Q]`).
-  - Mobile touch support with on-screen virtual analog joystick.
+  - Complete courier outfit customizer.
+  - Delivery checklist log modal.
+  - Responsive mobile touch support with on-screen virtual joystick.
 
 ## 🕹️ Controls
 - **Movement**: `W`, `A`, `S`, `D` or Arrow Keys
@@ -36,11 +39,6 @@ A 3D spherical low-poly planet delivery adventure built with Three.js, inspired 
 - **Interact / Talk**: `E` or click on nearby citizens
 - **Orbit Camera**: Left-click & drag
 - **Zoom**: Mouse scroll wheel
-- **Delivery Log**: `Q`
-- **Outfit Style**: `C`
-- **Controls Help**: `H`
 
-## 📦 Deployment
-Deployable directly as a static website on **GitHub Pages**.
-Just enable GitHub Pages in repository settings:
-`Settings -> Pages -> Branch: main -> Folder: / (root)`.
+---
+*Created and hosted by cold4u.*

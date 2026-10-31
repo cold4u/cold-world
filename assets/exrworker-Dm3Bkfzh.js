@@ -1,4 +1,4 @@
-/* by abeto - https://abeto.co */
+/* by cold4u */
 (function(){"use strict";/**
  * @license
  * Copyright 2010-2025 Three.js Authors
