@@ -17,6 +17,10 @@ A 3D spherical low-poly planet delivery adventure built with Three.js and Svelte
   - Smelly Falls (Waterfall canyon, Wooden dock)
   - Capital Corp (Futuristic Tech Laboratories)
   - Tropical Beach (Palm trees, Sand shores, Ocean pier)
+- **Living Wildlife & World Inhabitants**:
+  - **Animated Animals Across Every Biome**: Playful foxes, kitsunes, and wise horned owls in towns, forests, temples, beaches, and waterfalls.
+  - **Interactive Children**: Scouts earning badges, shell-gatherers, mountain climbers, and tech lab apprentices with full speech bubbles and voice blips.
+  - **Flocks of Soaring Birds**: Over 90 birds gliding on spherical air currents across the sky.
 - **5 Canonical Delivery Storylines**:
   1. *Falling off the corporate ladder* (Office Worker & The Boss)
   2. *A man who's hiding from something* (Caveman & Flower Lady)
