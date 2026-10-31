@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Messenger - Planet Delivery</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📦</text></svg>">
+  <link rel="stylesheet" href="style.css">
+  <!-- Three.js from fast reliable CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+  <!-- 3D Canvas Container -->
+  <div id="game-container"></div>
+
+  <!-- Ambient Sky vignette -->
+  <div id="vignette"></div>
+
+  <!-- HUD Header: Current Quest Objective -->
+  <header id="hud-top">
+    <div class="logo-badge">
+      <span class="icon">🪐</span>
+      <span class="title">MESSENGER</span>
+    </div>
+    
+    <div id="quest-banner" class="quest-banner hidden">
+      <div class="quest-tag" id="quest-title-tag">CURRENT DELIVERY</div>
+      <div class="quest-instruction" id="quest-instruction-text">Explore the planet and talk to the citizens!</div>
+      <div class="quest-distance" id="quest-distance-text"><span class="arrow">▲</span> <span class="dist">0m</span></div>
+    </div>
+
+    <div class="top-actions">
+      <button id="btn-audio" class="action-btn" title="Toggle Music">
+        <span id="audio-icon">🔊</span>
+      </button>
+      <button id="btn-quests" class="action-btn" title="Delivery Log [Q]">
+        <span>📋</span>
+        <span id="quest-badge" class="badge">0/5</span>
+      </button>
+      <button id="btn-customize" class="action-btn" title="Customize Outfit [C]">
+        <span>🧢</span>
+      </button>
+      <button id="btn-help" class="action-btn" title="Controls Help [H]">
+        <span>❓</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Interaction Prompt (Talk / Inspect) -->
+  <div id="interaction-prompt" class="interaction-prompt hidden">
+    <div class="prompt-key">E</div>
+    <div class="prompt-label" id="prompt-action-text">Talk to NPC</div>
+  </div>
+
+  <!-- NPC Dialogue Speech Bubble Overlay -->
+  <div id="dialogue-box" class="dialogue-box hidden">
+    <div class="dialogue-card">
+      <div class="dialogue-header">
+        <span class="dialogue-avatar" id="dialogue-npc-avatar">👤</span>
+        <div class="dialogue-speaker-info">
+          <span class="dialogue-name" id="dialogue-npc-name">Character</span>
+          <span class="dialogue-role" id="dialogue-npc-role">Citizen</span>
+        </div>
+      </div>
+      <div class="dialogue-body">
+        <p id="dialogue-text">Hello there!</p>
+      </div>
+      <div class="dialogue-footer">
+        <span class="dialogue-hint">Press <strong>[SPACE]</strong> or tap to continue</span>
+        <button id="dialogue-next-btn" class="dialogue-btn">Next ➔</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quest Completed / Delivery Celebration Banner -->
+  <div id="celebration-overlay" class="celebration-overlay hidden">
+    <div class="celebration-card">
+      <div class="stamp-icon">⭐</div>
+      <h2 id="celebration-title">DELIVERY COMPLETED!</h2>
+      <p id="celebration-desc">Package successfully delivered to the recipient.</p>
+      <div class="confetti-container" id="confetti-box"></div>
+      <button id="celebration-close-btn" class="primary-btn">Awesome!</button>
+    </div>
+  </div>
+
+  <!-- Quest Log Modal -->
+  <div id="modal-quests" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>📦 Deliveries & Quests</h2>
+        <button class="close-modal" id="close-quests-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-subtitle">"It's a small planet, but someone's gotta make the deliveries."</p>
+        <div id="quest-list" class="quest-list">
+          <!-- Filled dynamically by quests.js -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Outfit Customizer Modal -->
+  <div id="modal-customize" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>🧢 Messenger Style</h2>
+        <button class="close-modal" id="close-customize-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="customizer-section">
+          <label>Uniform Color</label>
+          <div class="color-picker" id="uniform-colors">
+            <button class="color-swatch active" data-color="#2a6fdb" style="background: #2a6fdb;"></button>
+            <button class="color-swatch" data-color="#e0533c" style="background: #e0533c;"></button>
+            <button class="color-swatch" data-color="#2ca563" style="background: #2ca563;"></button>
+            <button class="color-swatch" data-color="#e59819" style="background: #e59819;"></button>
+            <button class="color-swatch" data-color="#8447d4" style="background: #8447d4;"></button>
+            <button class="color-swatch" data-color="#2c3437" style="background: #2c3437;"></button>
+          </div>
+        </div>
+        <div class="customizer-section">
+          <label>Hat Style</label>
+          <div class="option-pills" id="hat-styles">
+            <button class="pill-btn active" data-hat="cap">Courier Cap</button>
+            <button class="pill-btn" data-hat="beanie">Beanie</button>
+            <button class="pill-btn" data-hat="flower">Flower</button>
+            <button class="pill-btn" data-hat="none">None</button>
+          </div>
+        </div>
+        <div class="customizer-section">
+          <label>Backpack</label>
+          <div class="option-pills" id="bag-styles">
+            <button class="pill-btn active" data-bag="satchel">Satchel</button>
+            <button class="pill-btn" data-bag="backpack">Big Pack</button>
+            <button class="pill-btn" data-bag="none">None</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls Help Modal -->
+  <div id="modal-help" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>🎮 How to Play</h2>
+        <button class="close-modal" id="close-help-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="help-grid">
+          <div class="help-item">
+            <span class="key-combo">W A S D / Arrows</span>
+            <span class="desc">Move around the planet</span>
+          </div>
+          <div class="help-item">
+            <span class="key-combo">Space</span>
+            <span class="desc">Jump / Leap</span>
+          </div>
+          <div class="help-item">
+            <span class="key-combo">Shift</span>
+            <span class="desc">Sprint / Speed up</span>
+          </div>
+          <div class="help-item">
+            <span class="key-combo">E / Click</span>
+            <span class="desc">Interact & Talk with Citizens</span>
+          </div>
+          <div class="help-item">
+            <span class="key-combo">Left Drag</span>
+            <span class="desc">Orbit Camera around planet</span>
+          </div>
+          <div class="help-item">
+            <span class="key-combo">Scroll</span>
+            <span class="desc">Zoom in / out</span>
+          </div>
+        </div>
+        <p class="soundtrack-info">
+          🎵 Official Soundtrack: <em>"Messenger" by Abeto</em> (streamed live from <a href="https://messenger.abeto.co" target="_blank" rel="noopener">messenger.abeto.co</a>)
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile On-Screen Controls -->
+  <div id="mobile-controls" class="mobile-controls">
+    <div id="joystick-zone" class="joystick-zone">
+      <div id="joystick-base" class="joystick-base">
+        <div id="joystick-knob" class="joystick-knob"></div>
+      </div>
+    </div>
+    <div class="mobile-buttons">
+      <button id="mobile-btn-action" class="mobile-btn action" title="Interact">💬</button>
+      <button id="mobile-btn-jump" class="mobile-btn jump" title="Jump">⬆️</button>
+    </div>
+  </div>
+
+  <!-- Intro Screen Overlay -->
+  <div id="intro-screen" class="intro-screen">
+    <div class="intro-content">
+      <div class="intro-planet-badge">🪐</div>
+      <h1 class="intro-title">MESSENGER</h1>
+      <p class="intro-tagline">"It's a small planet, but someone's gotta make the deliveries."</p>
+      <p class="intro-sub">A 3D spherical planet delivery adventure inspired by abeto.co</p>
+      <button id="start-game-btn" class="start-btn">Start Delivering ➔</button>
+      <p class="intro-credits">Features the official relaxing soundtrack and 5 connected delivery quests</p>
+    </div>
+  </div>
+
+  <!-- Audio Element for official soundtrack -->
+  <audio id="bg-audio" preload="auto" loop></audio>
+
+  <!-- Game Scripts -->
+  <script src="js/audio.js"></script>
+  <script src="js/planet.js"></script>
+  <script src="js/player.js"></script>
+  <script src="js/npcs.js"></script>
+  <script src="js/quests.js"></script>
+  <script src="js/controls.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
