@@ -558,65 +558,67 @@
         user-select: none;
       `;
 
-      // Status Badge
+      // Status Badge (Shows online player count)
       const statusBadge = document.createElement("div");
       statusBadge.id = "cw-status-badge";
+      statusBadge.title = "Multiplayer status: You are connected to the live planet!";
       statusBadge.style.cssText = `
-        background: rgba(15, 23, 42, 0.85);
-        backdrop-filter: blur(8px);
+        background: rgba(15, 23, 42, 0.88);
+        backdrop-filter: blur(10px);
         color: #f8fafc;
-        padding: 6px 12px;
+        padding: 6px 14px;
         border-radius: 20px;
         border: 1px solid rgba(255, 255, 255, 0.15);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
         font-weight: 600;
         display: flex;
         align-items: center;
         gap: 6px;
       `;
-      statusBadge.innerHTML = `<span id="cw-status-text">🟡 Connecting...</span>`;
+      statusBadge.innerHTML = `<span id="cw-status-text">🟡 Joining Planet...</span>`;
 
-      // Mic Button
+      // Mic Button (Voice Chat Mute/Unmute)
       const micBtn = document.createElement("button");
       micBtn.id = "cw-mic-btn";
-      micBtn.title = "Toggle Proximity Microphone (Hotkey: M)";
+      micBtn.title = "Toggle Proximity Voice Chat (Hotkey: M)";
       micBtn.style.cssText = `
-        background: rgba(239, 68, 68, 0.85);
-        backdrop-filter: blur(8px);
+        background: rgba(239, 68, 68, 0.88);
+        backdrop-filter: blur(10px);
         color: white;
         border: 1px solid rgba(255, 255, 255, 0.2);
-        padding: 6px 12px;
+        padding: 6px 13px;
         border-radius: 20px;
         font-weight: 700;
         cursor: pointer;
         display: flex;
         align-items: center;
         gap: 6px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-        transition: transform 0.1s, background 0.2s;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+        transition: transform 0.1s, background 0.2s, box-shadow 0.2s;
       `;
-      micBtn.innerHTML = `<span>🔇 Mic: MUTED</span> <span style="font-size:10px;opacity:0.8;">[M]</span>`;
+      micBtn.innerHTML = `<span>🔇 Mic: OFF</span> <span style="font-size:10px;opacity:0.8;">[M]</span>`;
       micBtn.onclick = () => this.toggleMic();
 
-      // Room / Invite Button
+      // Invite Friends Button (Copies invite link to clipboard)
       const roomBtn = document.createElement("button");
       roomBtn.id = "cw-room-btn";
-      roomBtn.title = "Room settings & invite link";
+      roomBtn.title = "Click to copy your multiplayer invite link to share with friends!";
       roomBtn.style.cssText = `
-        background: rgba(15, 23, 42, 0.85);
-        backdrop-filter: blur(8px);
+        background: rgba(15, 23, 42, 0.88);
+        backdrop-filter: blur(10px);
         color: #38bdf8;
-        border: 1px solid rgba(56, 189, 248, 0.3);
-        padding: 6px 12px;
+        border: 1px solid rgba(56, 189, 248, 0.4);
+        padding: 6px 13px;
         border-radius: 20px;
         font-weight: 600;
         cursor: pointer;
         display: flex;
         align-items: center;
-        gap: 5px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        gap: 6px;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+        transition: transform 0.1s, background 0.2s;
       `;
-      roomBtn.innerHTML = `<span>🪐 ${this.room}</span> <span>📋</span>`;
+      roomBtn.innerHTML = `<span>🔗 Invite Friends</span> <span style="font-size:11px;opacity:0.85;">(${this.room})</span>`;
       roomBtn.onclick = () => this.copyInviteLink();
 
       // Change Name / Room Button
