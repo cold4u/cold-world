@@ -1,11 +1,28 @@
 // ============================================================================
 // Cold World - Universal Cross-Device Real-Time Multiplayer, Radar Map & Spatial Voice
-// Designed for seamless synchronization across Phone (iOS/Android), PC, and Laptop
-// Powered by Secure WebSocket Mesh (HiveMQ) + WebRTC (PeerJS) for Zero-Backend GitHub Pages
+// Features: Automatic Host World Synchronization, Native Character Mesh,
+//           High-Altitude Sky Beacons, Live Radar HUD & Holographic World Map
 // ============================================================================
 
 (function() {
-  console.log("[Cold World Multiplayer] Initializing Universal Cross-Device Engine with Live Radar & World Map...");
+  console.log("[Cold World Multiplayer] Initializing Universal Engine with Host World Synchronization...");
+
+  // Pure-math Quaternion to Euler [x, y, z] in radians (Zero-dependency)
+  function quatToEulerArray(q) {
+    const x = q.x || 0, y = q.y || 0, z = q.z || 0, w = (typeof q.w === "number") ? q.w : 1;
+    const sinPitch = 2 * (w * x - y * z);
+    let pitch, yaw, roll;
+    if (Math.abs(sinPitch) >= 0.9999) {
+      pitch = Math.sign(sinPitch) * (Math.PI / 2);
+      yaw = Math.atan2(2 * (x * z + w * y), 1 - 2 * (x * x + y * y));
+      roll = 0;
+    } else {
+      pitch = Math.asin(sinPitch);
+      yaw = Math.atan2(2 * (x * z + w * y), 1 - 2 * (x * x + y * y));
+      roll = Math.atan2(2 * (x * y + w * z), 1 - 2 * (x * x + z * z));
+    }
+    return [pitch, yaw, roll];
+  }
 
   // Known NPC Coordinates & Metadata across Cold World Biomes
   const KNOWN_NPCS = [
@@ -29,16 +46,17 @@
 
   class UniversalMultiplayerEngine {
     constructor() {
-      this.maxPlayers = 10;
       this.peers = new Map(); // id -> peerData
       this.myId = "cw_" + Math.random().toString(36).substring(2, 10);
       this.playerName = localStorage.getItem("cw_player_name") || ("Courier_" + Math.floor(100 + Math.random() * 900));
-      
+      this.connectedAt = Date.now();
+      this.hasSpawnSynced = false;
+
       // Networking & MQTT
       this.mqttClient = null;
       this.isMqttConnected = false;
       this.lastBroadcast = 0;
-      this.broadcastInterval = 45; // ~22 Hz
+      this.broadcastInterval = 40; // ~25 Hz
 
       // WebRTC Voice Chat
       this.peer = null;
@@ -47,8 +65,8 @@
       this.audioCtx = null;
       this.localAnalyser = null;
       this.localVolumeData = new Uint8Array(32);
-      this.activeCalls = new Map(); // id -> call
-      this.audioElements = new Map(); // id -> HTMLAudioElement
+      this.activeCalls = new Map();
+      this.audioElements = new Map();
 
       // Radar & Map state
       this.radarAngle = 0;
@@ -82,7 +100,7 @@
       const check = setInterval(() => {
         if (window._scene && window._characters && window.THREE) {
           clearInterval(check);
-          console.log("[Cold World Multiplayer] 3D world ready! Hooking native character system & WebSocket mesh...");
+          console.log("[Cold World Multiplayer] 3D world ready! Starting network & world synchronization...");
           this.initMqttNetwork();
           this.initPeerVoice();
           this.startRenderLoop();
@@ -121,7 +139,7 @@
 
           this.mqttClient.subscribe(["coldworld/global/presence", "coldworld/global/state"], (err) => {
             if (!err) {
-              console.log("[Cold World Multiplayer] Joined global channels!");
+              console.log("[Cold World Multiplayer] Joined global channels! Announcing presence...");
               this.publishPresence("join");
             }
           });
@@ -162,6 +180,7 @@
         type: type,
         id: this.myId,
         name: this.playerName,
+        connectedAt: this.connectedAt,
         pos: pos,
         quat: quat
       };
@@ -179,21 +198,74 @@
       if (!data || data.id === this.myId) return;
 
       if (topic === "coldworld/global/presence") {
-        if (data.type === "join" || data.type === "hello" || data.type === "heartbeat") {
+        // --- 1. Automatic Host World Synchronization ---
+        if (data.type === "join") {
           let p = this.peers.get(data.id);
           if (!p) {
             console.log(`[Cold World Multiplayer] Player joined: ${data.name} (${data.id})`);
             p = this.createPeerRecord(data.id, data.name, data.pos, data.quat);
             this.peers.set(data.id, p);
             this.updatePlayerListUI();
+          }
 
-            if (data.type === "join") {
-              this.publishPresence("hello");
-            }
+          // If we were connected before this joining player, we act as the Host Anchor!
+          // We transfer our exact world location so the joiner automatically spawns right next to us!
+          const localChar = window._characters?.mesh?._localObject;
+          if (localChar) {
+            console.log(`[Cold World] Transferring host world location to new joiner: ${data.name}`);
+            const syncMsg = {
+              type: "world_sync",
+              targetId: data.id,
+              hostId: this.myId,
+              hostName: this.playerName,
+              hostPos: [localChar.position.x, localChar.position.y, localChar.position.z],
+              hostQuat: [localChar.quaternion.x, localChar.quaternion.y, localChar.quaternion.z, localChar.quaternion.w]
+            };
+            this.mqttClient.publish("coldworld/global/presence", JSON.stringify(syncMsg), { qos: 0 });
+          }
 
-            if (this.localStream && !this.activeCalls.has(data.id)) {
-              this.callPeer(data.id);
+          if (this.localStream && !this.activeCalls.has(data.id)) {
+            this.callPeer(data.id);
+          }
+        }
+        else if (data.type === "world_sync") {
+          // Received world synchronization from the host!
+          if (data.targetId === this.myId && !this.hasSpawnSynced) {
+            this.hasSpawnSynced = true;
+            console.log(`[Cold World] Received Host World Sync from ${data.hostName}! Teleporting to host location...`);
+            this.showNotification(`🌍 Joined ${data.hostName}'s world!`);
+
+            if (data.hostPos && data.hostPos.length === 3 && window._characters?.mesh) {
+              const THREE = window.THREE;
+              const hPos = new THREE.Vector3(...data.hostPos);
+              const up = hPos.clone().normalize();
+              // Spawn 2.2 meters to the side of the host
+              const side = new THREE.Vector3(1, 0, 0).applyAxisAngle(up, Math.random() * Math.PI * 2).multiplyScalar(2.2);
+              const spawnTarget = hPos.clone().add(side);
+
+              setTimeout(() => {
+                try {
+                  window._characters.mesh.setInitialPosition(
+                    [spawnTarget.x, spawnTarget.y, spawnTarget.z],
+                    2.0,
+                    0,
+                    up.toArray()
+                  );
+                  console.log("[Cold World] Spawn successfully aligned with Host!");
+                  this.publishPresence("heartbeat");
+                } catch(e) {
+                  console.warn("[Multiplayer] Host alignment notice:", e);
+                }
+              }, 600);
             }
+          }
+        }
+        else if (data.type === "hello" || data.type === "heartbeat") {
+          let p = this.peers.get(data.id);
+          if (!p) {
+            p = this.createPeerRecord(data.id, data.name, data.pos, data.quat);
+            this.peers.set(data.id, p);
+            this.updatePlayerListUI();
           } else {
             p.lastSeen = performance.now();
             if (data.name && data.name !== p.name) {
@@ -201,10 +273,12 @@
               this.updateBeaconNameTag(p.beaconGroup, p.name);
             }
           }
-        } else if (data.type === "leave") {
+        }
+        else if (data.type === "leave") {
           this.removePeer(data.id);
         }
-      } else if (topic === "coldworld/global/state") {
+      }
+      else if (topic === "coldworld/global/state") {
         let p = this.peers.get(data.id);
         if (!p) {
           p = this.createPeerRecord(data.id, data.name || "Courier", data.pos, data.quat);
@@ -227,7 +301,6 @@
           this.updateBeaconNameTag(p.beaconGroup, p.name);
         }
 
-        // Sync to native character mesh connection clients
         this.updateNativeCharacter(p);
       }
     }
@@ -240,8 +313,14 @@
       if (initialPos && initialPos.length === 3) pos.set(initialPos[0], initialPos[1], initialPos[2]);
       if (initialQuat && initialQuat.length === 4) quat.set(initialQuat[0], initialQuat[1], initialQuat[2], initialQuat[3]);
 
-      // 1. Create High-Altitude Sky Beacon (visible across planetary curvature)
+      // 1. Create High-Altitude Sky Beacon (Visible across planet curvature)
       const beaconGroup = this.createSkyBeacon(name, pos);
+
+      // 2. Create High-Fidelity 3D Courier Model
+      const avatarGroup = this.createCustomAvatar(name);
+      if (window._scene) {
+        window._scene.add(avatarGroup);
+      }
 
       const record = {
         id: id,
@@ -251,15 +330,17 @@
         currentPos: pos.clone(),
         currentQuat: quat.clone(),
         beaconGroup: beaconGroup,
+        avatarGroup: avatarGroup,
         audioElement: this.audioElements.get(id) || null,
         analyser: null,
         isMoving: false,
         isSpeaking: false,
         distanceToLocal: 999,
+        animTime: 0,
         lastSeen: performance.now()
       };
 
-      // 2. Spawn native batched character in the 3D scene
+      // 3. Spawn native engine character
       this.spawnNativeCharacter(record);
 
       return record;
@@ -269,7 +350,6 @@
       if (!window._characters || !window._characters.mesh) return;
       const mesh = window._characters.mesh;
 
-      // Ensure _connection._clients Map exists
       if (!mesh._connection) {
         mesh._connection = { _clients: new Map() };
       }
@@ -299,7 +379,7 @@
             obj.scale.setScalar(1);
           }
         } catch (e) {
-          console.warn("[Multiplayer] Error spawning native character:", e);
+          console.warn("[Multiplayer] Native character spawn notice:", e);
         }
       }
 
@@ -317,25 +397,87 @@
         mesh._connection = { _clients: new Map() };
       }
 
-      // Check if native character object is spawned
       if (!mesh._charactersObjects.has(peer.id)) {
         this.spawnNativeCharacter(peer);
       } else {
         const obj = mesh._charactersObjects.get(peer.id);
-        if (obj && obj.scale.x < 0.5) {
+        if (obj) {
           obj.scale.setScalar(1);
+          obj.position.copy(peer.currentPos);
+          obj.quaternion.copy(peer.currentQuat);
+          obj.targetPosition.copy(peer.currentPos);
+          obj.prevPosition.copy(peer.currentPos);
+          obj.nextPosition.copy(peer.currentPos);
+          obj.targetRotation.copy(peer.currentQuat);
+          obj.prevRotation.copy(peer.currentQuat);
+          obj.nextRotation.copy(peer.currentQuat);
         }
       }
 
-      // Compute Euler rotation from quaternion for the native connection
-      const THREE = window.THREE;
-      const euler = new THREE.Euler().setFromQuaternion(peer.quat, "YXZ");
-
+      const euler = quatToEulerArray(peer.quat);
       mesh._connection._clients.set(peer.id, {
         p: [peer.pos.x, peer.pos.y, peer.pos.z],
-        r: [euler.x, euler.y, euler.z],
+        r: euler,
         animation: peer.isMoving ? 1 : 0
       });
+    }
+
+    // --- High-Fidelity 3D Courier Avatar (Always Visible Everywhere) ---
+    createCustomAvatar(name) {
+      const THREE = window.THREE;
+      const g = new THREE.Group();
+      g.name = "CustomAvatar_" + name;
+
+      // Jacket (Courier Blue)
+      const jacketMat = new THREE.MeshStandardMaterial({ color: "#2563eb", roughness: 0.7, metalness: 0.1 });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.72, 0.36), jacketMat);
+      body.position.y = 0.85;
+      body.castShadow = true;
+      body.receiveShadow = true;
+      g.add(body);
+
+      // Head & Cap
+      const skinMat = new THREE.MeshStandardMaterial({ color: "#fcd34d", roughness: 0.8, metalness: 0.05 });
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.38, 0.38), skinMat);
+      head.position.y = 1.36;
+      head.castShadow = true;
+
+      const capMat = new THREE.MeshStandardMaterial({ color: "#1d4ed8", roughness: 0.6, metalness: 0.1 });
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.15, 0.42), capMat);
+      cap.position.set(0, 1.51, 0);
+      const visor = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.05, 0.22), capMat);
+      visor.position.set(0, 1.46, 0.22);
+      g.add(head, cap, visor);
+
+      // Backpack & Parcel
+      const packMat = new THREE.MeshStandardMaterial({ color: "#78350f", roughness: 0.85, metalness: 0.1 });
+      const pack = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.52, 0.26), packMat);
+      pack.position.set(0, 0.85, -0.28);
+
+      const parcelMat = new THREE.MeshStandardMaterial({ color: "#f59e0b", roughness: 0.8, metalness: 0.05 });
+      const parcel = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.24, 0.2), parcelMat);
+      parcel.position.set(0, 0.85, -0.45);
+      g.add(pack, parcel);
+
+      // Animated Limbs
+      const pantsMat = new THREE.MeshStandardMaterial({ color: "#0f172a", roughness: 0.8, metalness: 0.1 });
+      const legL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.6, 0.18), pantsMat);
+      legL.position.set(0.13, 0.3, 0);
+      const legR = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.6, 0.18), pantsMat);
+      legR.position.set(-0.13, 0.3, 0);
+      g.add(legL, legR);
+      g._legL = legL;
+      g._legR = legR;
+
+      const armL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.55, 0.14), jacketMat);
+      armL.position.set(0.34, 0.8, 0);
+      const armR = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.55, 0.14), jacketMat);
+      armR.position.set(-0.34, 0.8, 0);
+      g.add(armL, armR);
+      g._armL = armL;
+      g._armR = armR;
+
+      return g;
     }
 
     // --- High-Altitude Sky Beacon (Visible over the planet horizon) ---
@@ -345,27 +487,27 @@
       g.name = "SkyBeacon_" + name;
 
       // 1. Vertical Light Pillar (35 units tall, reaching into stratosphere)
-      const beamGeo = new THREE.BoxGeometry(0.28, 35, 0.28);
+      const beamGeo = new THREE.BoxGeometry(0.32, 35, 0.32);
       const beamMat = new THREE.MeshBasicMaterial({
         color: "#38bdf8",
         transparent: true,
-        opacity: 0.75,
+        opacity: 0.85,
         depthWrite: false
       });
       const beam = new THREE.Mesh(beamGeo, beamMat);
-      beam.position.y = 17.5; // Centers beam from ground (y=0) to y=35
+      beam.position.y = 17.5;
       g.add(beam);
 
       // 2. Glowing Apex Crystal at top of pillar
-      const apexGeo = new THREE.SphereGeometry(0.75, 6, 6);
+      const apexGeo = new THREE.SphereGeometry(0.85, 6, 6);
       const apexMat = new THREE.MeshBasicMaterial({ color: "#67e8f9" });
       const apex = new THREE.Mesh(apexGeo, apexMat);
       apex.position.y = 35;
       g.add(apex);
 
       // 3. Ground Landing Ring
-      const ringGeo = new THREE.PlaneGeometry(2.4, 2.4);
-      const ringMat = new THREE.MeshBasicMaterial({ color: "#38bdf8", transparent: true, opacity: 0.5, depthWrite: false });
+      const ringGeo = new THREE.PlaneGeometry(2.6, 2.6);
+      const ringMat = new THREE.MeshBasicMaterial({ color: "#38bdf8", transparent: true, opacity: 0.6, depthWrite: false });
       const ring = new THREE.Mesh(ringGeo, ringMat);
       ring.rotation.x = -Math.PI / 2;
       ring.position.y = 0.05;
@@ -379,12 +521,11 @@
 
       // 5. 3D Speaker Icon
       const voiceIcon = this.createVoiceIconSprite();
-      voiceIcon.position.y = 2.85;
+      voiceIcon.position.y = 2.9;
       voiceIcon.visible = false;
       g.add(voiceIcon);
       g._voiceIcon = voiceIcon;
 
-      // Align beacon along planet normal
       g.position.copy(pos);
       const up = pos.clone().normalize();
       g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
@@ -415,7 +556,7 @@
 
     drawNameTagCanvas(ctx, name, distText, w, h) {
       ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+      ctx.fillStyle = "rgba(15, 23, 42, 0.92)";
       ctx.beginPath();
       if (ctx.roundRect) {
         ctx.roundRect(6, 6, w - 12, h - 12, 16);
@@ -489,6 +630,9 @@
         if (p.beaconGroup && p.beaconGroup.parent) {
           p.beaconGroup.parent.remove(p.beaconGroup);
         }
+        if (p.avatarGroup && p.avatarGroup.parent) {
+          p.avatarGroup.parent.remove(p.avatarGroup);
+        }
         if (window._characters?.mesh) {
           try {
             window._characters.mesh._removeCharacter(id);
@@ -526,24 +670,54 @@
       try {
         const mesh = window._characters.mesh;
         const up = targetPos.clone().normalize().toArray();
-        // Snap local player 2.5 meters away from target
-        mesh.setInitialPosition([targetPos.x, targetPos.y, targetPos.z], 2.5, 0, up);
+        mesh.setInitialPosition([targetPos.x, targetPos.y, targetPos.z], 2.2, 0, up);
         this.closeWorldMap();
-
-        // Broadcast updated state immediately
+        this.showNotification(`🚀 Teleported to ${targetPeer.name}!`);
         this.publishPresence("heartbeat");
       } catch (e) {
         console.error("[Cold World] Teleport error:", e);
       }
     }
 
-    teleportToCoords(x, y, z) {
+    teleportToCoords(x, y, z, biomeName = "") {
       if (!window._characters?.mesh) return;
       const THREE = window.THREE;
       const target = new THREE.Vector3(x, y, z);
       const up = target.clone().normalize().toArray();
       window._characters.mesh.setInitialPosition([x, y, z], 2.0, 0, up);
       this.closeWorldMap();
+      if (biomeName) {
+        this.showNotification(`✈️ Traveled to ${biomeName}!`);
+      }
+    }
+
+    showNotification(text) {
+      const el = document.createElement("div");
+      el.style.cssText = `
+        position: fixed;
+        top: 60px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 99999999;
+        background: rgba(15, 23, 42, 0.95);
+        backdrop-filter: blur(12px);
+        color: #38bdf8;
+        border: 1px solid rgba(56, 189, 248, 0.5);
+        border-radius: 20px;
+        padding: 8px 18px;
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 13px;
+        font-weight: 700;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        animation: fadeIn 0.3s ease;
+      `;
+      el.textContent = text;
+      document.body.appendChild(el);
+      setTimeout(() => {
+        el.style.opacity = "0";
+        el.style.transition = "opacity 0.5s ease";
+        setTimeout(() => el.remove(), 500);
+      }, 3500);
     }
 
     // --- WebRTC Spatial Voice Chat (PeerJS) ---
@@ -569,7 +743,7 @@
       });
 
       this.peer.on("call", (call) => {
-        console.log("[Cold World Voice] Received incoming call from:", call.peer);
+        console.log("[Cold World Voice] Incoming call from:", call.peer);
         if (this.localStream) {
           call.answer(this.localStream);
         } else {
@@ -721,7 +895,7 @@
 
       const THREE = window.THREE;
 
-      // 1. Broadcast local state at ~22Hz
+      // 1. Broadcast state at ~25Hz
       if (now - this.lastBroadcast > this.broadcastInterval && this.isMqttConnected) {
         this.lastBroadcast = now;
         const isMoving = (localChar.animationProps?.weights[1] || 0) > 0.1 || (localChar.animationProps?.weights[2] || 0) > 0.1;
@@ -735,7 +909,7 @@
         this.mqttClient.publish("coldworld/global/state", JSON.stringify(stateMsg), { qos: 0 });
       }
 
-      // 2. Local Voice Activity Detection
+      // 2. Voice Activity Detection
       if (this.localAnalyser && !this.isMicMuted) {
         this.localAnalyser.getByteFrequencyData(this.localVolumeData);
         let sum = 0;
@@ -762,18 +936,36 @@
           closestPeer = p;
         }
 
+        // Update Custom Avatar (Courier Mesh)
+        if (p.avatarGroup) {
+          p.avatarGroup.position.copy(p.currentPos);
+          p.avatarGroup.quaternion.copy(p.currentQuat);
+
+          if (p.isMoving) {
+            p.animTime += 0.25;
+            const swing = Math.sin(p.animTime) * 0.45;
+            if (p.avatarGroup._legL) p.avatarGroup._legL.rotation.x = swing;
+            if (p.avatarGroup._legR) p.avatarGroup._legR.rotation.x = -swing;
+            if (p.avatarGroup._armL) p.avatarGroup._armL.rotation.x = -swing;
+            if (p.avatarGroup._armR) p.avatarGroup._armR.rotation.x = swing;
+          } else {
+            if (p.avatarGroup._legL) p.avatarGroup._legL.rotation.x = 0;
+            if (p.avatarGroup._legR) p.avatarGroup._legR.rotation.x = 0;
+            if (p.avatarGroup._armL) p.avatarGroup._armL.rotation.x = 0;
+            if (p.avatarGroup._armR) p.avatarGroup._armR.rotation.x = 0;
+          }
+        }
+
         // Position Sky Beacon
         if (p.beaconGroup) {
           p.beaconGroup.position.copy(p.currentPos);
           const up = p.currentPos.clone().normalize();
           p.beaconGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
 
-          // Update distance label on beacon tag every 15 frames
           if (Math.random() < 0.1) {
             this.updateBeaconNameTag(p.beaconGroup, p.name, `${dist}m`);
           }
 
-          // Billboard Name Tag to face camera
           if (window._camera) {
             if (p.beaconGroup._nameTag) {
               p.beaconGroup._nameTag.quaternion.copy(p.beaconGroup.quaternion).invert().multiply(window._camera.quaternion);
@@ -794,7 +986,7 @@
           audioEl.volume = Math.min(1.0, Math.max(0.0, vol));
         }
 
-        // Remote Voice Activity
+        // Voice Activity Icon
         if (p.analyser && p.beaconGroup?._voiceIcon) {
           const freqData = new Uint8Array(16);
           p.analyser.getByteFrequencyData(freqData);
@@ -826,7 +1018,6 @@
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       `;
 
-      // Radar Canvas (Glassmorphic circular radar)
       const canvas = document.createElement("canvas");
       canvas.id = "cw-radar-canvas";
       canvas.width = 136;
@@ -846,7 +1037,6 @@
       this.radarCanvas = canvas;
       this.radarCtx = canvas.getContext("2d");
 
-      // Nearest Player Tracker & Meet Up Card
       const tracker = document.createElement("div");
       tracker.id = "cw-tracker-card";
       tracker.style.cssText = `
@@ -865,7 +1055,6 @@
       `;
       this.trackerCard = tracker;
 
-      // Expand Map Button
       const mapBtn = document.createElement("button");
       mapBtn.id = "cw-map-btn";
       mapBtn.style.cssText = `
@@ -892,7 +1081,6 @@
       radarWrapper.appendChild(mapBtn);
       document.body.appendChild(radarWrapper);
 
-      // Keyboard hotkeys
       window.addEventListener("keydown", (e) => {
         if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
         if (e.key === "m" || e.key === "M") {
@@ -916,13 +1104,12 @@
 
       ctx.clearRect(0, 0, w, h);
 
-      // 1. Circular Radar Clipping Area
       ctx.save();
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.clip();
 
-      // 2. Concentric Range Rings (15m, 30m, 50m)
+      // Range Rings (15m, 30m, 50m)
       ctx.strokeStyle = "rgba(56, 189, 248, 0.15)";
       ctx.lineWidth = 1;
       [0.35, 0.65, 0.95].forEach(scale => {
@@ -931,7 +1118,7 @@
         ctx.stroke();
       });
 
-      // 3. Crosshair lines
+      // Crosshairs
       ctx.beginPath();
       ctx.moveTo(cx, cy - radius);
       ctx.lineTo(cx, cy + radius);
@@ -939,7 +1126,7 @@
       ctx.lineTo(cx + radius, cy);
       ctx.stroke();
 
-      // 4. Rotating sweep beam
+      // Rotating sweep
       this.radarAngle = (this.radarAngle + 0.035) % (Math.PI * 2);
       ctx.save();
       ctx.translate(cx, cy);
@@ -960,15 +1147,14 @@
       const cam = window._camera;
 
       if (localPos && cam) {
-        // Calculate camera facing direction on tangent plane
         const forward = new window.THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
         const up = localPos.clone().normalize();
         const tangentForward = forward.clone().sub(up.clone().multiplyScalar(forward.dot(up))).normalize();
         const tangentRight = new window.THREE.Vector3().crossVectors(tangentForward, up).normalize();
 
-        const radarRange = 45; // 45 meters full radar radius
+        const radarRange = 45;
 
-        // 5. Draw NPCs on Radar (Amber Diamonds)
+        // Draw NPCs on Radar (Amber Diamonds)
         KNOWN_NPCS.forEach(npc => {
           const npcVec = new window.THREE.Vector3(...npc.pos);
           const diff = npcVec.clone().sub(localPos);
@@ -986,11 +1172,10 @@
           }
         });
 
-        // 6. Draw Remote Players on Radar (Bright Cyan Pulsing Dots)
+        // Draw Remote Players on Radar (Bright Cyan Pulsing Dots)
         this.peers.forEach(peer => {
           const diff = peer.pos.clone().sub(localPos);
           const dist = diff.length();
-          const scale = Math.min(1.0, dist / radarRange);
           const xProj = diff.dot(tangentRight);
           const zProj = -diff.dot(tangentForward);
           const norm = Math.hypot(xProj, zProj) || 1;
@@ -998,26 +1183,23 @@
           const px = cx + (xProj / norm) * displayDist;
           const py = cy + (zProj / norm) * displayDist;
 
-          // Pulsing halo
           ctx.fillStyle = "rgba(56, 189, 248, 0.35)";
           ctx.beginPath();
           ctx.arc(px, py, 6, 0, Math.PI * 2);
           ctx.fill();
 
-          // Core dot
           ctx.fillStyle = "#38bdf8";
           ctx.beginPath();
           ctx.arc(px, py, 3.5, 0, Math.PI * 2);
           ctx.fill();
 
-          // Name tag on radar
           ctx.fillStyle = "#ffffff";
           ctx.font = "bold 8px sans-serif";
           ctx.textAlign = "center";
           ctx.fillText(peer.name.slice(0, 10), px, py - 6);
         });
 
-        // 7. Local Player Center Icon (Green Arrow pointing forward)
+        // Local Player Icon (Green Arrow pointing forward)
         ctx.fillStyle = "#22c55e";
         ctx.beginPath();
         ctx.moveTo(cx, cy - 6);
@@ -1030,7 +1212,6 @@
 
       ctx.restore();
 
-      // Outer border highlight
       ctx.strokeStyle = "rgba(56, 189, 248, 0.6)";
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -1092,7 +1273,6 @@
         overflow: hidden;
       `;
 
-      // Header
       const header = document.createElement("div");
       header.style.cssText = `
         display: flex;
@@ -1106,14 +1286,13 @@
         <div style="display:flex;align-items:center;gap:10px;">
           <span style="font-size:22px;">🗺️</span>
           <div>
-            <div style="font-size:16px;font-weight:700;color:#f8fafc;">Cold World Map & Live Navigator</div>
+            <div style="font-size:16px;font-weight:700;color:#f8fafc;">Cold World Map & Live Synchronizer</div>
             <div style="font-size:11px;color:#94a3b8;">Spherical World Topography • All NPCs & Online Players</div>
           </div>
         </div>
         <button id="cw-close-map" style="background:rgba(255,255,255,0.1);border:none;color:#fff;width:32px;height:32px;border-radius:50%;font-size:16px;cursor:pointer;font-weight:700;">✕</button>
       `;
 
-      // Content (World Map Canvas + Sidebar)
       const body = document.createElement("div");
       body.style.cssText = `
         display: flex;
@@ -1124,7 +1303,6 @@
         overflow-y: auto;
       `;
 
-      // Map Drawing Canvas (Unfolded 2D Spherical Projection)
       const mapCanvas = document.createElement("canvas");
       mapCanvas.id = "cw-map-big-canvas";
       mapCanvas.width = 460;
@@ -1140,7 +1318,6 @@
       this.bigMapCanvas = mapCanvas;
       this.bigMapCtx = mapCanvas.getContext("2d");
 
-      // Sidebar: Online Players & Biome Locations
       const sidebar = document.createElement("div");
       sidebar.id = "cw-map-sidebar";
       sidebar.style.cssText = `
@@ -1194,11 +1371,10 @@
 
       ctx.clearRect(0, 0, w, h);
 
-      // Planet Stylized Unfolded Background (Equirectangular Projection)
       ctx.fillStyle = "#0c1527";
       ctx.fillRect(0, 0, w, h);
 
-      // Latitude / Longitude grid
+      // Lat/Long Grid
       ctx.strokeStyle = "rgba(56, 189, 248, 0.1)";
       ctx.lineWidth = 1;
       for (let x = 0; x <= w; x += 46) {
@@ -1214,7 +1390,7 @@
         ctx.stroke();
       }
 
-      // Biome Regions (Stylized zones on sphere)
+      // Biomes
       const biomes = [
         { name: "🏖️ Seaside Bay", x: 60, y: 80, rx: 55, ry: 40, col: "rgba(14, 165, 233, 0.25)" },
         { name: "🏙️ Town Plaza", x: 180, y: 120, rx: 65, ry: 50, col: "rgba(245, 158, 11, 0.2)" },
@@ -1235,16 +1411,15 @@
         ctx.fillText(b.name, b.x, b.y);
       });
 
-      // Projection helper: maps [x, y, z] on sphere of radius ~28 to [canvasX, canvasY]
       const projectCoords = (pos) => {
-        const theta = Math.atan2(pos[0], pos[2]); // longitude [-PI, PI]
-        const phi = Math.asin(Math.max(-1, Math.min(1, pos[1] / 28.0))); // latitude [-PI/2, PI/2]
+        const theta = Math.atan2(pos[0], pos[2]);
+        const phi = Math.asin(Math.max(-1, Math.min(1, pos[1] / 28.0)));
         const cx = ((theta + Math.PI) / (Math.PI * 2)) * w;
         const cy = ((Math.PI / 2 - phi) / Math.PI) * h;
         return { x: cx, y: cy };
       };
 
-      // 1. Draw all NPCs on Big Map
+      // Draw all NPCs
       KNOWN_NPCS.forEach(npc => {
         const p = projectCoords(npc.pos);
         ctx.fillStyle = npc.color || "#f59e0b";
@@ -1258,17 +1433,15 @@
         ctx.fillText(npc.name, p.x, p.y - 7);
       });
 
-      // 2. Draw Remote Players
+      // Draw Remote Players
       this.peers.forEach(peer => {
         const p = projectCoords([peer.pos.x, peer.pos.y, peer.pos.z]);
 
-        // Glowing pulse
         ctx.fillStyle = "rgba(56, 189, 248, 0.4)";
         ctx.beginPath();
         ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
         ctx.fill();
 
-        // Center dot
         ctx.fillStyle = "#38bdf8";
         ctx.beginPath();
         ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
@@ -1280,7 +1453,7 @@
         ctx.fillText(`🔷 ${peer.name}`, p.x, p.y - 11);
       });
 
-      // 3. Draw Local Player
+      // Draw Local Player
       const localChar = window._characters?.mesh?._localObject;
       if (localChar) {
         const p = projectCoords([localChar.position.x, localChar.position.y, localChar.position.z]);
@@ -1301,7 +1474,7 @@
         ctx.fillText("🟢 YOU", p.x, p.y - 12);
       }
 
-      // 4. Update Sidebar Player List & Meet Up Controls
+      // Sidebar
       const sidebar = document.getElementById("cw-map-sidebar");
       if (sidebar) {
         let playersHtml = `
@@ -1318,7 +1491,7 @@
         if (this.peers.size === 0) {
           playersHtml += `
             <div style="padding:12px;background:rgba(15,23,42,0.6);border-radius:10px;font-size:11px;color:#94a3b8;line-height:1.4;">
-              Waiting for other players to join! As soon as someone opens the game on Phone or Laptop, they will appear right here and on your radar.
+              Waiting for other players to join! When someone opens the game on Phone or Laptop, their location automatically transfers and syncs right next to you!
             </div>
           `;
         } else {
@@ -1335,7 +1508,6 @@
           });
         }
 
-        // Fast Travel to Key Biomes
         playersHtml += `
           <div style="margin-top:6px;font-size:12px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Fast Travel Biomes</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
@@ -1348,7 +1520,6 @@
 
         sidebar.innerHTML = playersHtml;
 
-        // Wire teleport buttons
         sidebar.querySelectorAll(".cw-teleport-btn").forEach(btn => {
           btn.onclick = () => {
             const pid = btn.getAttribute("data-peer-id");
@@ -1357,14 +1528,13 @@
           };
         });
 
-        // Wire biome fast travel buttons
         sidebar.querySelectorAll(".cw-travel-btn").forEach(btn => {
           btn.onclick = () => {
             const loc = btn.getAttribute("data-loc");
-            if (loc === "town") this.teleportToCoords(27.6, 5.2, 1.4);
-            else if (loc === "beach") this.teleportToCoords(18.5, 14.5, 13.8);
-            else if (loc === "forest") this.teleportToCoords(-7.8, -21.2, 7.8);
-            else if (loc === "pagoda") this.teleportToCoords(-8.17, 32.35, -1.77);
+            if (loc === "town") this.teleportToCoords(27.6, 5.2, 1.4, "Town Plaza");
+            else if (loc === "beach") this.teleportToCoords(18.5, 14.5, 13.8, "Beach");
+            else if (loc === "forest") this.teleportToCoords(-7.8, -21.2, 7.8, "Pine Forest");
+            else if (loc === "pagoda") this.teleportToCoords(-8.17, 32.35, -1.77, "Sacred Mountain");
           };
         });
       }
