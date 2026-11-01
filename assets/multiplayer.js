@@ -9,21 +9,19 @@
 (function() {
   console.log("[Cold World Multiplayer] Initializing Universal Engine (Full Character Clothes & Clean Top-Bar Map)...");
 
-  // Pure-math Quaternion to Euler [x, y, z] in radians (Zero-dependency)
-  function quatToEulerArray(q) {
-    const x = q.x || 0, y = q.y || 0, z = q.z || 0, w = (typeof q.w === "number") ? q.w : 1;
-    const sinPitch = 2 * (w * x - y * z);
-    let pitch, yaw, roll;
-    if (Math.abs(sinPitch) >= 0.9999) {
-      pitch = Math.sign(sinPitch) * (Math.PI / 2);
-      yaw = Math.atan2(2 * (x * z + w * y), 1 - 2 * (x * x + y * y));
-      roll = 0;
-    } else {
-      pitch = Math.asin(sinPitch);
-      yaw = Math.atan2(2 * (x * z + w * y), 1 - 2 * (x * x + y * y));
-      roll = Math.atan2(2 * (x * y + w * z), 1 - 2 * (x * x + z * z));
+  // Robust conversion to Euler [x, y, z] matching Three.js conventions
+  function convertQuatOrRotToEuler(data) {
+    if (data.rot && Array.isArray(data.rot) && data.rot.length === 3) {
+      return data.rot;
     }
-    return [pitch, yaw, roll];
+    if (data.quat && Array.isArray(data.quat) && data.quat.length === 4) {
+      if (window.THREE && window.THREE.Euler && window.THREE.Quaternion) {
+        const q = new window.THREE.Quaternion(data.quat[0], data.quat[1], data.quat[2], data.quat[3]);
+        const e = new window.THREE.Euler().setFromQuaternion(q, "XYZ");
+        return [e.x, e.y, e.z];
+      }
+    }
+    return [0, 0, 0];
   }
 
   // Standard Default Complete Courier Wardrobe (Full Body, Hair, Jacket, Pants, Shoes)
@@ -192,8 +190,15 @@
     publishPresence(type = "heartbeat") {
       if (!this.mqttClient || !this.isMqttConnected) return;
       const localChar = window._characters?.mesh?._localObject;
-      const pos = localChar ? [localChar.position.x, localChar.position.y, localChar.position.z] : [0, 30, 0];
-      const quat = localChar ? [localChar.quaternion.x, localChar.quaternion.y, localChar.quaternion.z, localChar.quaternion.w] : [0, 0, 0, 1];
+      const pos = localChar
+        ? [+localChar.position.x.toFixed(3), +localChar.position.y.toFixed(3), +localChar.position.z.toFixed(3)]
+        : [0, 30, 0];
+      const rot = localChar
+        ? [+localChar.rotation.x.toFixed(3), +localChar.rotation.y.toFixed(3), +localChar.rotation.z.toFixed(3)]
+        : [0, 0, 0];
+      const quat = localChar
+        ? [localChar.quaternion.x, localChar.quaternion.y, localChar.quaternion.z, localChar.quaternion.w]
+        : [0, 0, 0, 1];
 
       const data = {
         type: type,
@@ -202,7 +207,10 @@
         connectedAt: this.connectedAt,
         modelFiles: this.getLocalWardrobe(),
         pos: pos,
-        quat: quat
+        rot: rot,
+        quat: quat,
+        medium: localChar?.userData?.medium || 0,
+        animation: localChar?.userData?.animation || 0
       };
       this.mqttClient.publish("coldworld/global/presence", JSON.stringify(data), { qos: 0 });
     }
@@ -220,9 +228,10 @@
       if (topic === "coldworld/global/presence") {
         if (data.type === "join") {
           let p = this.peers.get(data.id);
+          const rot = convertQuatOrRotToEuler(data);
           if (!p) {
             console.log(`[Cold World Multiplayer] Player joined: ${data.name} (${data.id})`);
-            p = this.createPeerRecord(data.id, data.name, data.pos, data.quat, data.modelFiles);
+            p = this.createPeerRecord(data.id, data.name, data.pos, rot, data.modelFiles);
             this.peers.set(data.id, p);
             this.updatePlayerListUI();
           }
@@ -236,7 +245,8 @@
               targetId: data.id,
               hostId: this.myId,
               hostName: this.playerName,
-              hostPos: [localChar.position.x, localChar.position.y, localChar.position.z],
+              hostPos: [+localChar.position.x.toFixed(3), +localChar.position.y.toFixed(3), +localChar.position.z.toFixed(3)],
+              hostRot: [+localChar.rotation.x.toFixed(3), +localChar.rotation.y.toFixed(3), +localChar.rotation.z.toFixed(3)],
               hostQuat: [localChar.quaternion.x, localChar.quaternion.y, localChar.quaternion.z, localChar.quaternion.w],
               modelFiles: this.getLocalWardrobe()
             };
@@ -257,13 +267,11 @@
               const THREE = window.THREE;
               const hPos = new THREE.Vector3(...data.hostPos);
               const up = hPos.clone().normalize();
-              const side = new THREE.Vector3(1, 0, 0).applyAxisAngle(up, Math.random() * Math.PI * 2).multiplyScalar(2.2);
-              const spawnTarget = hPos.clone().add(side);
 
               setTimeout(() => {
                 try {
                   window._characters.mesh.setInitialPosition(
-                    [spawnTarget.x, spawnTarget.y, spawnTarget.z],
+                    [hPos.x, hPos.y, hPos.z],
                     2.0,
                     0,
                     up.toArray()
@@ -279,8 +287,9 @@
         }
         else if (data.type === "hello" || data.type === "heartbeat") {
           let p = this.peers.get(data.id);
+          const rot = convertQuatOrRotToEuler(data);
           if (!p) {
-            p = this.createPeerRecord(data.id, data.name, data.pos, data.quat, data.modelFiles);
+            p = this.createPeerRecord(data.id, data.name, data.pos, rot, data.modelFiles);
             this.peers.set(data.id, p);
             this.updatePlayerListUI();
           } else {
@@ -300,8 +309,9 @@
       }
       else if (topic === "coldworld/global/state") {
         let p = this.peers.get(data.id);
+        const rot = convertQuatOrRotToEuler(data);
         if (!p) {
-          p = this.createPeerRecord(data.id, data.name || "Courier", data.pos, data.quat, data.modelFiles);
+          p = this.createPeerRecord(data.id, data.name || "Courier", data.pos, rot, data.modelFiles);
           this.peers.set(data.id, p);
           this.updatePlayerListUI();
         }
@@ -310,9 +320,9 @@
         if (data.pos && data.pos.length === 3) {
           p.pos.set(data.pos[0], data.pos[1], data.pos[2]);
         }
-        if (data.quat && data.quat.length === 4) {
-          p.quat.set(data.quat[0], data.quat[1], data.quat[2], data.quat[3]);
-        }
+        p.rot = rot;
+        if (data.medium !== undefined) p.medium = data.medium;
+        if (data.animation !== undefined) p.animation = data.animation;
         if (typeof data.isMoving === "boolean") {
           p.isMoving = data.isMoving;
         }
@@ -328,13 +338,19 @@
       }
     }
 
-    createPeerRecord(id, name, initialPos = null, initialQuat = null, modelFiles = null) {
+    createPeerRecord(id, name, initialPos = null, initialRotOrQuat = null, modelFiles = null) {
       const THREE = window.THREE;
       const pos = new THREE.Vector3(0, 30, 0);
-      const quat = new THREE.Quaternion();
+      let rot = [0, 0, 0];
 
       if (initialPos && initialPos.length === 3) pos.set(initialPos[0], initialPos[1], initialPos[2]);
-      if (initialQuat && initialQuat.length === 4) quat.set(initialQuat[0], initialQuat[1], initialQuat[2], initialQuat[3]);
+      if (initialRotOrQuat) {
+        if (Array.isArray(initialRotOrQuat) && initialRotOrQuat.length === 3) {
+          rot = initialRotOrQuat;
+        } else if (Array.isArray(initialRotOrQuat) && initialRotOrQuat.length === 4) {
+          rot = convertQuatOrRotToEuler({ quat: initialRotOrQuat });
+        }
+      }
 
       // Complete Wardrobe: base + hair + top + bottom + shoes
       const wardrobe = (Array.isArray(modelFiles) && modelFiles.length >= 4)
@@ -348,9 +364,9 @@
         id: id,
         name: name,
         pos: pos,
-        quat: quat,
-        currentPos: pos.clone(),
-        currentQuat: quat.clone(),
+        rot: rot,
+        medium: 0,
+        animation: 0,
         beaconGroup: beaconGroup,
         modelFiles: wardrobe,
         audioElement: this.audioElements.get(id) || null,
@@ -372,8 +388,15 @@
       const mesh = window._characters.mesh;
 
       if (!mesh._connection) {
-        mesh._connection = { _clients: new Map() };
+        mesh._connection = {
+          _clients: new Map(),
+          _data: {},
+          _createSocket: () => {},
+          _sendRelayedData: () => {}
+        };
       }
+
+      const rot = peer.rot || [0, 0, 0];
 
       if (!mesh._charactersObjects.has(peer.id)) {
         // Complete wardrobe ensures full body, jacket, pants, shoes, and hair
@@ -394,7 +417,9 @@
             "avatar/avatar-afk3"
           ],
           p: [peer.pos.x, peer.pos.y, peer.pos.z],
-          r: [0, 0, 0],
+          r: [rot[0], rot[1], rot[2]],
+          medium: peer.medium || 0,
+          animation: peer.animation || 0,
           tag: peer.name
         };
 
@@ -413,8 +438,9 @@
 
       mesh._connection._clients.set(peer.id, {
         p: [peer.pos.x, peer.pos.y, peer.pos.z],
-        r: [0, 0, 0],
-        animation: 0
+        r: [rot[0], rot[1], rot[2]],
+        medium: peer.medium || 0,
+        animation: peer.animation || 0
       });
     }
 
@@ -422,40 +448,59 @@
       if (!window._characters || !window._characters.mesh) return;
       const mesh = window._characters.mesh;
       if (!mesh._connection) {
-        mesh._connection = { _clients: new Map() };
+        mesh._connection = {
+          _clients: new Map(),
+          _data: {},
+          _createSocket: () => {},
+          _sendRelayedData: () => {}
+        };
       }
 
       if (!mesh._charactersObjects.has(peer.id)) {
         this.spawnNativeCharacter(peer);
-      } else {
-        const obj = mesh._charactersObjects.get(peer.id);
-        if (obj) {
-          obj.scale.setScalar(1);
-          obj.position.copy(peer.currentPos);
-          obj.quaternion.copy(peer.currentQuat);
-          obj.targetPosition.copy(peer.currentPos);
-          obj.prevPosition.copy(peer.currentPos);
-          obj.nextPosition.copy(peer.currentPos);
-          obj.targetRotation.copy(peer.currentQuat);
-          obj.prevRotation.copy(peer.currentQuat);
-          obj.nextRotation.copy(peer.currentQuat);
+        return;
+      }
 
-          // If peer clothes updated, reload batched geometries
-          if (peer.modelFiles && JSON.stringify(obj.userData.modelFiles) !== JSON.stringify(peer.modelFiles)) {
-            obj.userData.modelFiles = peer.modelFiles;
-            if (typeof mesh._loadBatchedGeometries === "function") {
-              try { mesh._loadBatchedGeometries(obj); } catch(e) {}
-            }
+      const obj = mesh._charactersObjects.get(peer.id);
+      if (obj) {
+        obj.scale.setScalar(1);
+
+        // If peer clothes updated, reload batched geometries
+        if (peer.modelFiles && JSON.stringify(obj.userData.modelFiles) !== JSON.stringify(peer.modelFiles)) {
+          obj.userData.modelFiles = peer.modelFiles;
+          if (typeof mesh._loadBatchedGeometries === "function") {
+            try { mesh._loadBatchedGeometries(obj); } catch(e) {}
           }
         }
       }
 
-      const euler = quatToEulerArray(peer.quat);
-      mesh._connection._clients.set(peer.id, {
-        p: [peer.pos.x, peer.pos.y, peer.pos.z],
-        r: euler,
-        animation: peer.isMoving ? 1 : 0
-      });
+      // Feed peer data directly into mesh._connection._clients.
+      // Cold World internal game engine automatically handles:
+      // - Smooth frame-by-frame interpolation (lerp & slerp)
+      // - Correct velocity & velocityHorizontal computation
+      // - Natural walk / run / sprint animation blending based on real movement
+      // - Ground/Air jump animation blending
+      // - Multi-draw instance matrix GPU upload
+      const rot = peer.rot || [0, 0, 0];
+      let client = mesh._connection._clients.get(peer.id);
+      if (!client) {
+        client = {
+          p: [peer.pos.x, peer.pos.y, peer.pos.z],
+          r: [rot[0], rot[1], rot[2]],
+          medium: peer.medium || 0,
+          animation: peer.animation || 0
+        };
+        mesh._connection._clients.set(peer.id, client);
+      } else {
+        client.p[0] = peer.pos.x;
+        client.p[1] = peer.pos.y;
+        client.p[2] = peer.pos.z;
+        client.r[0] = rot[0];
+        client.r[1] = rot[1];
+        client.r[2] = rot[2];
+        client.medium = peer.medium || 0;
+        client.animation = peer.animation || 0;
+      }
     }
 
     // --- High-Altitude Sky Beacon (Visible over planet curvature) ---
@@ -873,12 +918,31 @@
       // 1. Broadcast state at ~25Hz
       if (now - this.lastBroadcast > this.broadcastInterval && this.isMqttConnected) {
         this.lastBroadcast = now;
-        const isMoving = (localChar.animationProps?.weights[1] || 0) > 0.1 || (localChar.animationProps?.weights[2] || 0) > 0.1;
+        const isMoving = (localChar.animationProps?.weights[1] || 0) > 0.05 || (localChar.animationProps?.weights[2] || 0) > 0.05;
+        const pos = [
+          +localChar.position.x.toFixed(3),
+          +localChar.position.y.toFixed(3),
+          +localChar.position.z.toFixed(3)
+        ];
+        const rot = [
+          +localChar.rotation.x.toFixed(3),
+          +localChar.rotation.y.toFixed(3),
+          +localChar.rotation.z.toFixed(3)
+        ];
+        const quat = [
+          +localChar.quaternion.x.toFixed(4),
+          +localChar.quaternion.y.toFixed(4),
+          +localChar.quaternion.z.toFixed(4),
+          +localChar.quaternion.w.toFixed(4)
+        ];
         const stateMsg = {
           id: this.myId,
           name: this.playerName,
-          pos: [localChar.position.x, localChar.position.y, localChar.position.z],
-          quat: [localChar.quaternion.x, localChar.quaternion.y, localChar.quaternion.z, localChar.quaternion.w],
+          pos: pos,
+          rot: rot,
+          quat: quat,
+          medium: localChar.userData?.medium || 0,
+          animation: localChar.userData?.animation || 0,
           modelFiles: this.getLocalWardrobe(),
           isMoving: isMoving
         };
@@ -901,10 +965,11 @@
       let minDistance = 9999;
 
       this.peers.forEach((p) => {
-        p.currentPos.lerp(p.pos, 0.25);
-        p.currentQuat.slerp(p.quat, 0.25);
+        const charObj = window._characters?.mesh?._charactersObjects?.get(p.id);
+        const effectivePos = (charObj && charObj.position && charObj.position.lengthSq() > 1) ? charObj.position : p.pos;
+        const effectiveQuat = (charObj && charObj.quaternion) ? charObj.quaternion : null;
 
-        const dist = Math.round(localPos.distanceTo(p.pos));
+        const dist = Math.round(localPos.distanceTo(effectivePos));
         p.distanceToLocal = dist;
 
         if (dist < minDistance) {
@@ -912,11 +977,15 @@
           closestPeer = p;
         }
 
-        // Position Sky Beacon
+        // Position Sky Beacon directly anchored to the rendered character
         if (p.beaconGroup) {
-          p.beaconGroup.position.copy(p.currentPos);
-          const up = p.currentPos.clone().normalize();
-          p.beaconGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
+          p.beaconGroup.position.copy(effectivePos);
+          if (effectiveQuat) {
+            p.beaconGroup.quaternion.copy(effectiveQuat);
+          } else {
+            const up = effectivePos.clone().normalize();
+            p.beaconGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
+          }
 
           if (Math.random() < 0.1) {
             this.updateBeaconNameTag(p.beaconGroup, p.name, `${dist}m`);
@@ -948,12 +1017,19 @@
           p.analyser.getByteFrequencyData(freqData);
           let sum = 0;
           for (let i = 0; i < freqData.length; i++) sum += freqData[i];
-          p.beaconGroup._voiceIcon.visible = (sum / freqData.length) > 12;
+          const avg = sum / freqData.length;
+          p.isSpeaking = avg > 14;
+          p.beaconGroup._voiceIcon.visible = p.isSpeaking;
         }
       });
 
       this.nearestPeer = closestPeer;
       this.updateTrackerUI();
+
+      // 4. Update World Map if visible
+      if (this.isMapOpen) {
+        this.renderBigMap();
+      }
     }
 
     // --- Clean Top Header UI (Zero Obstruction for Phone Touch Controls) ---
