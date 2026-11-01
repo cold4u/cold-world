@@ -1,4 +1,3 @@
-
 // ============================================================================
 // Cold World - Real-Time 3D Multiplayer & Proximity Voice Chat Engine
 // Powered by WebRTC & PeerJS for zero-backend static deployment (GitHub Pages)
@@ -6,12 +5,12 @@
 // ============================================================================
 
 (function() {
-  console.log("[Cold World Multiplayer] Initializing...");
+  console.log("[Cold World Multiplayer] Initializing engine...");
 
   class MultiplayerEngine {
     constructor() {
       this.maxPlayers = 10;
-      this.peers = new Map(); // peerId -> { conn, call, avatar, gainNode, analyser, stream, name, pos, quat, isMoving }
+      this.peers = new Map(); // peerId -> { conn, call, avatar, audioElement, analyser, name, pos, quat, isMoving }
       this.peer = null;
       this.mySlot = -1;
       this.myPeerId = null;
@@ -19,13 +18,13 @@
       this.playerName = localStorage.getItem("cw_player_name") || ("Courier_" + Math.floor(100 + Math.random() * 900));
       this.localStream = null;
       this.isMicMuted = true;
-      this.audioCtx = null;
       this.localAnalyser = null;
       this.localVolumeData = new Uint8Array(32);
       this.isLocalSpeaking = false;
       this.lastBroadcast = 0;
-      this.broadcastInterval = 45; // ~22 Hz
+      this.broadcastInterval = 40; // 25 Hz
       this.activeCalls = new Map(); // peerId -> call
+      this.slotCheckInterval = null;
 
       this.initUI();
       this.waitForThreeScene();
@@ -44,14 +43,14 @@
       const check = setInterval(() => {
         if (window._scene && window._characters && window.THREE) {
           clearInterval(check);
-          console.log("[Cold World Multiplayer] Three.js scene & characters connected!");
+          console.log("[Cold World Multiplayer] 3D world ready! Joining network...");
           this.initNetwork();
           this.startRenderLoop();
         }
       }, 500);
     }
 
-    // --- Networking (PeerJS Mesh Room) ---
+    // --- PeerJS Mesh Network ---
     initNetwork() {
       if (typeof Peer === "undefined") {
         console.warn("[Cold World Multiplayer] PeerJS not loaded yet, retrying...");
@@ -59,7 +58,7 @@
         return;
       }
 
-      this.updateStatusUI("Connecting to room...", "#f59e0b");
+      this.updateStatusUI("Joining room...", "#f59e0b");
       this.findAvailableSlot(0);
     }
 
@@ -84,18 +83,25 @@
         this.mySlot = slot;
         this.myPeerId = id;
         this.peer = tempPeer;
-        console.log(`[Cold World Multiplayer] Connected as Slot #${slot} (${id}) in room '${this.room}'`);
+        console.log(`[Cold World Multiplayer] Joined as Slot #${slot} (${id}) in room '${this.room}'`);
         this.setupPeerEvents();
         this.connectToOtherSlots();
+
+        // Periodically probe for new players that join other slots
+        if (this.slotCheckInterval) clearInterval(this.slotCheckInterval);
+        this.slotCheckInterval = setInterval(() => {
+          this.connectToOtherSlots();
+        }, 4000);
       });
 
       tempPeer.on("error", (err) => {
         if (err.type === "unavailable-id") {
           tempPeer.destroy();
           this.findAvailableSlot(slot + 1);
+        } else if (err.type === "peer-unavailable") {
+          // Expected when probing slots that are currently empty
         } else {
-          console.warn("[Cold World Multiplayer] Peer error:", err);
-          this.updateStatusUI("Network error: " + err.type, "#ef4444");
+          console.warn("[Cold World Multiplayer] Peer warning:", err.type);
         }
       });
     }
@@ -105,32 +111,49 @@
     }
 
     setupPeerEvents() {
-      this.updateStatusUI(`🟢 Online (${this.peers.size + 1}/${this.maxPlayers})`, "#22c55e");
+      this.updatePlayerListUI();
 
       // Incoming data connections
       this.peer.on("connection", (conn) => {
         this.handleIncomingConnection(conn);
       });
 
-      // Incoming audio voice calls
+      // Incoming voice calls
       this.peer.on("call", (call) => {
         console.log("[Cold World Voice] Incoming voice call from", call.peer);
-        call.answer(this.localStream);
-        this.handleVoiceCall(call);
+        if (this.localStream) {
+          call.answer(this.localStream);
+        } else {
+          call.answer();
+        }
+        this.activeCalls.set(call.peer, call);
+        this.setupCall(call);
       });
 
       this.peer.on("disconnected", () => {
         this.updateStatusUI("Reconnecting...", "#f59e0b");
         this.peer.reconnect();
       });
+
+      this.peer.on("error", (err) => {
+        if (err.type === "peer-unavailable" || err.type === "unavailable-id") {
+          return;
+        }
+        console.warn("[Cold World Multiplayer] Network notice:", err.type);
+      });
     }
 
     connectToOtherSlots() {
+      if (!this.peer || this.peer.destroyed) return;
+
       for (let s = 0; s < this.maxPlayers; s++) {
         if (s === this.mySlot) continue;
         const targetId = `cw_${this.cleanRoom(this.room)}_${s}`;
+        
+        // Skip if already connected to this peer
+        if (this.peers.has(targetId)) continue;
+
         const conn = this.peer.connect(targetId, {
-          reliable: false,
           metadata: { name: this.playerName, slot: this.mySlot }
         });
         this.setupConnectionHandlers(conn);
@@ -143,25 +166,32 @@
 
     setupConnectionHandlers(conn) {
       conn.on("open", () => {
-        console.log("[Cold World Multiplayer] Connected to peer:", conn.peer);
+        console.log("[Cold World Multiplayer] Connected to player:", conn.peer);
+        if (this.peers.has(conn.peer)) return;
+
         const remotePeerData = {
           conn: conn,
           name: conn.metadata?.name || ("Courier_" + conn.peer.slice(-3)),
           avatar: this.createRemoteAvatar(conn.metadata?.name),
+          audioElement: null,
+          analyser: null,
           pos: new window.THREE.Vector3(0, 30, 0),
           quat: new window.THREE.Quaternion(),
           isMoving: false,
           isSpeaking: false,
-          animTime: 0
+          animTime: 0,
+          hasReceivedFirstState: false
         };
+
         this.peers.set(conn.peer, remotePeerData);
         this.updatePlayerListUI();
 
-        // If local mic is active, initiate WebRTC voice call
+        // Immediately send local state to newly connected peer
+        this.broadcastLocalState(conn);
+
+        // If mic is live, initiate voice call
         if (this.localStream && !this.activeCalls.has(conn.peer)) {
-          const call = this.peer.call(conn.peer, this.localStream);
-          this.activeCalls.set(conn.peer, call);
-          this.handleVoiceCall(call);
+          this.callPeer(conn.peer);
         }
       });
 
@@ -178,14 +208,52 @@
       });
     }
 
+    broadcastLocalState(targetConn = null) {
+      const localChar = window._characters?.mesh?._localObject;
+      if (!localChar) return;
+
+      const isMoving = (localChar.animationProps?.weights[1] || 0) > 0.1 || (localChar.animationProps?.weights[2] || 0) > 0.1;
+      const msg = {
+        type: "state",
+        name: this.playerName,
+        pos: [localChar.position.x, localChar.position.y, localChar.position.z],
+        quat: [localChar.quaternion.x, localChar.quaternion.y, localChar.quaternion.z, localChar.quaternion.w],
+        isMoving: isMoving
+      };
+
+      if (targetConn && targetConn.open) {
+        targetConn.send(msg);
+      } else {
+        this.peers.forEach((p) => {
+          if (p.conn && p.conn.open) {
+            p.conn.send(msg);
+          }
+        });
+      }
+    }
+
     handlePeerData(peerId, data) {
       const p = this.peers.get(peerId);
       if (!p) return;
 
       if (data.type === "state") {
-        if (data.pos) p.pos.set(data.pos[0], data.pos[1], data.pos[2]);
-        if (data.quat) p.quat.set(data.quat[0], data.quat[1], data.quat[2], data.quat[3]);
-        if (typeof data.isMoving === "boolean") p.isMoving = data.isMoving;
+        if (data.pos && data.pos.length === 3) {
+          p.pos.set(data.pos[0], data.pos[1], data.pos[2]);
+          if (!p.hasReceivedFirstState && p.avatar) {
+            p.hasReceivedFirstState = true;
+            p.avatar.position.copy(p.pos);
+            p.avatar.visible = true;
+          }
+        }
+        if (data.quat && data.quat.length === 4) {
+          p.quat.set(data.quat[0], data.quat[1], data.quat[2], data.quat[3]);
+          if (!p.hasReceivedFirstState && p.avatar) {
+            p.avatar.quaternion.copy(p.quat);
+          }
+        }
+        if (typeof data.isMoving === "boolean") {
+          p.isMoving = data.isMoving;
+        }
         if (data.name && data.name !== p.name) {
           p.name = data.name;
           this.updateAvatarNameTag(p.avatar, p.name);
@@ -204,49 +272,54 @@
           p.audioElement.srcObject = null;
           p.audioElement.remove();
         }
-        this.activeCalls.delete(peerId);
+        const call = this.activeCalls.get(peerId);
+        if (call) {
+          try { call.close(); } catch(e) {}
+          this.activeCalls.delete(peerId);
+        }
         this.peers.delete(peerId);
         this.updatePlayerListUI();
       }
     }
 
     // --- 3D Avatar Creation & Rendering ---
+    // Uses MeshBasicMaterial so avatars are 100% brightly visible everywhere on the planet
     createRemoteAvatar(name = "Courier") {
       const THREE = window.THREE;
       const g = new THREE.Group();
       g.name = "RemotePlayer_" + name;
+      g.visible = false; // Hidden until first position packet arrives
 
-      // Courier jacket body
-      const bodyMat = new THREE.MeshStandardMaterial({ color: "#2563eb", roughness: 0.8, metalness: 0.1, flatShading: true });
+      // Vibrant Courier Jacket
+      const bodyMat = new THREE.MeshBasicMaterial({ color: "#2563eb" });
       const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.7, 0.35), bodyMat);
       body.position.y = 0.85;
-      body.castShadow = true;
-      body.receiveShadow = true;
       g.add(body);
 
-      // Head with courier cap
-      const skinMat = new THREE.MeshStandardMaterial({ color: "#fcd34d", roughness: 0.8, metalness: 0.1, flatShading: true });
+      // Head & Cap
+      const skinMat = new THREE.MeshBasicMaterial({ color: "#fbbf24" });
       const head = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.38, 0.38), skinMat);
       head.position.y = 1.35;
-      head.castShadow = true;
-      const capMat = new THREE.MeshStandardMaterial({ color: "#1d4ed8", roughness: 0.8, metalness: 0.1, flatShading: true });
+
+      const capMat = new THREE.MeshBasicMaterial({ color: "#1d4ed8" });
       const cap = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.15, 0.42), capMat);
       cap.position.set(0, 1.5, 0);
       const visor = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.05, 0.22), capMat);
       visor.position.set(0, 1.45, 0.22);
       g.add(head, cap, visor);
 
-      // Delivery parcel backpack
-      const packMat = new THREE.MeshStandardMaterial({ color: "#78350f", roughness: 0.9, metalness: 0.1, flatShading: true });
+      // Delivery Backpack & Parcel
+      const packMat = new THREE.MeshBasicMaterial({ color: "#b45309" });
       const backpack = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.5, 0.25), packMat);
       backpack.position.set(0, 0.85, -0.28);
-      const parcelMat = new THREE.MeshStandardMaterial({ color: "#d97706", roughness: 0.9, metalness: 0.1, flatShading: true });
+
+      const parcelMat = new THREE.MeshBasicMaterial({ color: "#f59e0b" });
       const parcel = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.25, 0.2), parcelMat);
       parcel.position.set(0, 0.85, -0.45);
       g.add(backpack, parcel);
 
-      // Limbs (Legs & Arms for walk animation)
-      const pantsMat = new THREE.MeshStandardMaterial({ color: "#334155", roughness: 0.9, metalness: 0.1, flatShading: true });
+      // Limbs for Walking Animation
+      const pantsMat = new THREE.MeshBasicMaterial({ color: "#1e293b" });
       const legL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.6, 0.18), pantsMat);
       legL.position.set(0.14, 0.3, 0);
       const legR = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.6, 0.18), pantsMat);
@@ -264,17 +337,17 @@
       g._armR = armR;
 
       // 3D Billboard Name Tag
-      const nameTagSprite = this.createNameTagSprite(name);
-      nameTagSprite.position.y = 1.95;
-      g.add(nameTagSprite);
-      g._nameTag = nameTagSprite;
+      const nameTag = this.createNameTagSprite(name);
+      nameTag.position.y = 2.05;
+      g.add(nameTag);
+      g._nameTag = nameTag;
 
-      // 3D Speaking Indicator Icon
-      const voiceIconSprite = this.createVoiceIconSprite();
-      voiceIconSprite.position.y = 2.45;
-      voiceIconSprite.visible = false;
-      g.add(voiceIconSprite);
-      g._voiceIcon = voiceIconSprite;
+      // 3D Speaking Indicator
+      const voiceIcon = this.createVoiceIconSprite();
+      voiceIcon.position.y = 2.5;
+      voiceIcon.visible = false;
+      g.add(voiceIcon);
+      g._voiceIcon = voiceIcon;
 
       if (window._scene) {
         window._scene.add(g);
@@ -301,7 +374,7 @@
 
     drawNameTagCanvas(ctx, name, w, h) {
       ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+      ctx.fillStyle = "rgba(15, 23, 42, 0.88)";
       ctx.beginPath();
       if (ctx.roundRect) {
         ctx.roundRect(8, 8, w - 16, h - 16, 16);
@@ -309,7 +382,7 @@
         ctx.rect(8, 8, w - 16, h - 16);
       }
       ctx.fill();
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.8)";
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.9)";
       ctx.lineWidth = 3;
       ctx.stroke();
 
@@ -334,7 +407,7 @@
       canvas.height = 128;
       const ctx = canvas.getContext("2d");
 
-      ctx.fillStyle = "rgba(34, 197, 94, 0.9)";
+      ctx.fillStyle = "rgba(34, 197, 94, 0.95)";
       ctx.beginPath();
       ctx.arc(64, 64, 48, 0, Math.PI * 2);
       ctx.fill();
@@ -352,7 +425,7 @@
       return mesh;
     }
 
-    // --- Real-Time Proximity Voice Chat ---
+    // --- High-Quality WebRTC Voice Chat ---
     async toggleMic() {
       if (this.isMicMuted) {
         await this.enableMic();
@@ -364,43 +437,42 @@
     async enableMic() {
       try {
         if (!this.localStream) {
-          // Disable browser AEC/DSP ducking to prevent degradation or low-pass filtering of background music
+          // Standard audio capture with crisp echo cancellation & noise suppression
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
-              echoCancellation: false,
-              noiseSuppression: false,
-              autoGainControl: false,
-              googEchoCancellation: false,
-              googAutoGainControl: false,
-              googNoiseSuppression: false,
-              googHighpassFilter: false,
-              googTypingNoiseDetection: false,
-              googAudioMirroring: false
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
             }
           });
           this.localStream = stream;
 
-          // Reuse the game's native AudioContext to eliminate dual-context OS mixer ducking and preserve 48kHz audio quality
-          this.audioCtx = window.audioContext || this.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-          if (this.audioCtx.state === "suspended") {
-            await this.audioCtx.resume();
+          // Local Voice Activity Detection Analyser
+          try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            this.audioCtx = this.audioCtx || new AudioCtx();
+            if (this.audioCtx.state === "suspended") {
+              this.audioCtx.resume().catch(() => {});
+            }
+            const src = this.audioCtx.createMediaStreamSource(stream);
+            this.localAnalyser = this.audioCtx.createAnalyser();
+            this.localAnalyser.fftSize = 64;
+            src.connect(this.localAnalyser);
+          } catch(e) {
+            console.warn("[Voice VAD]", e);
           }
 
-          const src = this.audioCtx.createMediaStreamSource(stream);
-          this.localAnalyser = this.audioCtx.createAnalyser();
-          this.localAnalyser.fftSize = 64;
-          src.connect(this.localAnalyser);
-
-          // Call all connected peers with audio stream
+          // Call all connected peers
           this.peers.forEach((p, peerId) => {
-            if (!this.activeCalls.has(peerId)) {
-              const call = this.peer.call(peerId, this.localStream);
-              this.activeCalls.set(peerId, call);
-              this.handleVoiceCall(call);
-            }
+            this.callPeer(peerId);
           });
         } else {
           this.localStream.getAudioTracks().forEach(t => t.enabled = true);
+          this.peers.forEach((p, peerId) => {
+            if (!this.activeCalls.has(peerId)) {
+              this.callPeer(peerId);
+            }
+          });
         }
 
         this.isMicMuted = false;
@@ -420,41 +492,68 @@
       this.updateMicUI();
     }
 
-    handleVoiceCall(call) {
+    callPeer(peerId) {
+      if (!this.localStream || !this.peer) return;
+
+      const existingCall = this.activeCalls.get(peerId);
+      if (existingCall) {
+        try { existingCall.close(); } catch(e) {}
+      }
+
+      console.log("[Cold World Voice] Calling peer:", peerId);
+      const call = this.peer.call(peerId, this.localStream);
+      if (call) {
+        this.activeCalls.set(peerId, call);
+        this.setupCall(call);
+      }
+    }
+
+    setupCall(call) {
       call.on("stream", (remoteStream) => {
-        console.log("[Cold World Voice] Received remote audio stream from", call.peer);
+        console.log("[Cold World Voice] Audio stream received from:", call.peer);
         const p = this.peers.get(call.peer);
         if (!p) return;
 
-        // Use the unified AudioContext for remote player voice rendering
-        this.audioCtx = window.audioContext || this.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-        if (this.audioCtx.state === "suspended") {
-          this.audioCtx.resume();
+        // Clean HTML5 Audio element for 100% reliable cross-browser voice playback
+        let audioEl = p.audioElement;
+        if (!audioEl) {
+          audioEl = document.createElement("audio");
+          audioEl.autoplay = true;
+          audioEl.playsInline = true;
+          document.body.appendChild(audioEl);
+          p.audioElement = audioEl;
         }
 
-        const src = this.audioCtx.createMediaStreamSource(remoteStream);
-        const gainNode = this.audioCtx.createGain();
-        const analyser = this.audioCtx.createAnalyser();
-        analyser.fftSize = 64;
-
-        src.connect(analyser);
-        analyser.connect(gainNode);
-        gainNode.connect(this.audioCtx.destination);
-
-        p.gainNode = gainNode;
-        p.analyser = analyser;
-        p.audioStream = remoteStream;
-
-        const audioEl = document.createElement("audio");
         audioEl.srcObject = remoteStream;
-        audioEl.muted = true;
-        audioEl.volume = 0;
-        audioEl.play().catch(() => {});
-        p.audioElement = audioEl;
+        audioEl.play().catch(e => {
+          console.warn("[Voice Autoplay]", e);
+        });
+
+        // Remote Voice Activity Detection
+        try {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          this.audioCtx = this.audioCtx || new AudioCtx();
+          if (this.audioCtx.state === "suspended") {
+            this.audioCtx.resume().catch(() => {});
+          }
+          const src = this.audioCtx.createMediaStreamSource(remoteStream);
+          const analyser = this.audioCtx.createAnalyser();
+          analyser.fftSize = 64;
+          src.connect(analyser);
+          p.analyser = analyser;
+        } catch(e) {}
+      });
+
+      call.on("close", () => {
+        const p = this.peers.get(call.peer);
+        if (p && p.audioElement) {
+          p.audioElement.srcObject = null;
+        }
+        this.activeCalls.delete(call.peer);
       });
     }
 
-    // --- Main Update Loop (Frame by Frame) ---
+    // --- Main Render & Update Loop ---
     startRenderLoop() {
       const tick = () => {
         requestAnimationFrame(tick);
@@ -466,28 +565,15 @@
     update() {
       const now = performance.now();
       const localChar = window._characters?.mesh?._localObject;
-
       if (!localChar) return;
 
-      // 1. Broadcast local player state at ~22Hz
+      // 1. Broadcast local player position & orientation
       if (now - this.lastBroadcast > this.broadcastInterval && this.peers.size > 0) {
         this.lastBroadcast = now;
-        const isMoving = (localChar.animationProps?.weights[1] || 0) > 0.1 || (localChar.animationProps?.weights[2] || 0) > 0.1;
-        const msg = {
-          type: "state",
-          name: this.playerName,
-          pos: [localChar.position.x, localChar.position.y, localChar.position.z],
-          quat: [localChar.quaternion.x, localChar.quaternion.y, localChar.quaternion.z, localChar.quaternion.w],
-          isMoving: isMoving
-        };
-        this.peers.forEach((p) => {
-          if (p.conn && p.conn.open) {
-            p.conn.send(msg);
-          }
-        });
+        this.broadcastLocalState();
       }
 
-      // 2. Check local Voice Activity Detection (VAD)
+      // 2. Local Voice Activity Detection
       if (this.localAnalyser && !this.isMicMuted) {
         this.localAnalyser.getByteFrequencyData(this.localVolumeData);
         let sum = 0;
@@ -497,16 +583,17 @@
         this.updateLocalVoiceWave(avg);
       }
 
-      // 3. Update remote avatars & proximity 3D audio attenuation
+      // 3. Update remote avatars & proximity audio
       const localPos = localChar.position;
-      const maxAudioDist = 32.0;
 
       this.peers.forEach((p) => {
         if (!p.avatar) return;
 
         // Smooth position & rotation interpolation
-        p.avatar.position.lerp(p.pos, 0.15);
-        p.avatar.quaternion.slerp(p.quat, 0.15);
+        if (p.hasReceivedFirstState) {
+          p.avatar.position.lerp(p.pos, 0.2);
+          p.avatar.quaternion.slerp(p.quat, 0.2);
+        }
 
         // Billboard name tag & speaking icon to face camera
         if (window._camera) {
@@ -520,7 +607,7 @@
 
         // Walk / run limb animation
         if (p.isMoving) {
-          p.animTime += 0.18;
+          p.animTime += 0.2;
           const swing = Math.sin(p.animTime) * 0.45;
           if (p.avatar._legL) p.avatar._legL.rotation.x = swing;
           if (p.avatar._legR) p.avatar._legR.rotation.x = -swing;
@@ -533,20 +620,18 @@
           if (p.avatar._armR) p.avatar._armR.rotation.x = 0;
         }
 
-        // Proximity Voice Attenuation
-        const dist = localPos.distanceTo(p.avatar.position);
-        if (p.gainNode && this.audioCtx) {
-          let vol = 0;
-          if (dist < 4.0) {
-            vol = 1.0;
-          } else if (dist < maxAudioDist) {
-            vol = Math.max(0, 1.0 - (dist - 4.0) / (maxAudioDist - 4.0));
-            vol = vol * vol; // Quadratic smooth falloff
+        // Proximity 3D Voice Volume Attenuation
+        if (p.audioElement) {
+          const dist = localPos.distanceTo(p.avatar.position);
+          // Full volume up to 12m, smooth falloff up to 75m, with audible presence everywhere
+          let vol = 1.0;
+          if (dist > 12.0) {
+            vol = Math.max(0.15, 1.0 - (dist - 12.0) / 63.0);
           }
-          p.gainNode.gain.setTargetAtTime(vol, this.audioCtx.currentTime, 0.05);
+          p.audioElement.volume = Math.min(1.0, Math.max(0.0, vol));
         }
 
-        // Remote Voice Activity Detection (Speaker Icon over head)
+        // Remote Voice Activity Detection
         if (p.analyser) {
           const freqData = new Uint8Array(16);
           p.analyser.getByteFrequencyData(freqData);
@@ -560,7 +645,7 @@
       });
     }
 
-    // --- UI Overlay ---
+    // --- HUD UI Overlay ---
     initUI() {
       const container = document.createElement("div");
       container.id = "cw-multiplayer-hud";
@@ -577,10 +662,10 @@
         user-select: none;
       `;
 
-      // Status Badge (Shows online player count)
+      // Status Badge
       const statusBadge = document.createElement("div");
       statusBadge.id = "cw-status-badge";
-      statusBadge.title = "Multiplayer status: You are connected to the live planet!";
+      statusBadge.title = "Multiplayer status";
       statusBadge.style.cssText = `
         background: rgba(15, 23, 42, 0.88);
         backdrop-filter: blur(10px);
@@ -594,9 +679,9 @@
         align-items: center;
         gap: 6px;
       `;
-      statusBadge.innerHTML = `<span id="cw-status-text">🟡 Joining Planet...</span>`;
+      statusBadge.innerHTML = `<span id="cw-status-text">🟡 Joining Room...</span>`;
 
-      // Mic Button (Voice Chat Mute/Unmute)
+      // Mic Button
       const micBtn = document.createElement("button");
       micBtn.id = "cw-mic-btn";
       micBtn.title = "Toggle Proximity Voice Chat (Hotkey: M)";
@@ -618,10 +703,10 @@
       micBtn.innerHTML = `<span>🔇 Mic: OFF</span> <span style="font-size:10px;opacity:0.8;">[M]</span>`;
       micBtn.onclick = () => this.toggleMic();
 
-      // Invite Friends Button (Copies invite link to clipboard)
+      // Invite Friends Button
       const roomBtn = document.createElement("button");
       roomBtn.id = "cw-room-btn";
-      roomBtn.title = "Click to copy your multiplayer invite link to share with friends!";
+      roomBtn.title = "Click to copy invite link";
       roomBtn.style.cssText = `
         background: rgba(15, 23, 42, 0.88);
         backdrop-filter: blur(10px);
@@ -663,7 +748,7 @@
       container.appendChild(settingsBtn);
       document.body.appendChild(container);
 
-      // Keyboard hotkey 'M' for microphone toggle
+      // Keyboard hotkey 'M' for mic toggle
       window.addEventListener("keydown", (e) => {
         if (e.key === "m" || e.key === "M") {
           if (e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
