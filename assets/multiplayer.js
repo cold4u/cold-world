@@ -292,12 +292,11 @@
 
       const tex = new THREE.Texture(canvas);
       tex.needsUpdate = true;
-      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
-      const sprite = new THREE.Sprite(mat);
-      sprite.scale.set(1.4, 0.35, 1);
-      sprite._canvas = canvas;
-      sprite._ctx = ctx;
-      return sprite;
+      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false });
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.35), mat);
+      mesh._canvas = canvas;
+      mesh._ctx = ctx;
+      return mesh;
     }
 
     drawNameTagCanvas(ctx, name, w, h) {
@@ -348,10 +347,9 @@
 
       const tex = new THREE.Texture(canvas);
       tex.needsUpdate = true;
-      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
-      const sprite = new THREE.Sprite(mat);
-      sprite.scale.set(0.45, 0.45, 1);
-      return sprite;
+      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false });
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.45, 0.45), mat);
+      return mesh;
     }
 
     // --- Real-Time Proximity Voice Chat ---
@@ -509,6 +507,16 @@
         // Smooth position & rotation interpolation
         p.avatar.position.lerp(p.pos, 0.15);
         p.avatar.quaternion.slerp(p.quat, 0.15);
+
+        // Billboard name tag & speaking icon to face camera
+        if (window._camera) {
+          if (p.avatar._nameTag) {
+            p.avatar._nameTag.quaternion.copy(p.avatar.quaternion).invert().multiply(window._camera.quaternion);
+          }
+          if (p.avatar._voiceIcon) {
+            p.avatar._voiceIcon.quaternion.copy(p.avatar.quaternion).invert().multiply(window._camera.quaternion);
+          }
+        }
 
         // Walk / run limb animation
         if (p.isMoving) {
