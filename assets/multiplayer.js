@@ -1,11 +1,13 @@
 // ============================================================================
-// Cold World - Universal Cross-Device Real-Time Multiplayer, Radar Map & Spatial Voice
-// Features: Automatic Host World Synchronization, Native Character Mesh,
-//           High-Altitude Sky Beacons, Live Radar HUD & Holographic World Map
+// Cold World - Universal Cross-Device Real-Time Multiplayer & Spatial Voice
+// Features: Full Native Character Rendering (Full Clothes, Hair, Shoes & Rig),
+//           Host-to-Joiner World Synchronization, High-Altitude Sky Beacons,
+//           Clean Top-Bar Map HUD (Zero Screen Obstruction for Phone Controls),
+//           and Full Holographic World Map with Fast Travel & Instant Meet Up.
 // ============================================================================
 
 (function() {
-  console.log("[Cold World Multiplayer] Initializing Universal Engine with Host World Synchronization...");
+  console.log("[Cold World Multiplayer] Initializing Universal Engine (Full Character Clothes & Clean Top-Bar Map)...");
 
   // Pure-math Quaternion to Euler [x, y, z] in radians (Zero-dependency)
   function quatToEulerArray(q) {
@@ -23,6 +25,15 @@
     }
     return [pitch, yaw, roll];
   }
+
+  // Standard Default Complete Courier Wardrobe (Full Body, Hair, Jacket, Pants, Shoes)
+  const DEFAULT_WARDROBE = [
+    "avatar/accessories/base",
+    "avatar/accessories/hair2",
+    "avatar/accessories/top1",
+    "avatar/accessories/bottom1",
+    "avatar/accessories/shoes1"
+  ];
 
   // Known NPC Coordinates & Metadata across Cold World Biomes
   const KNOWN_NPCS = [
@@ -68,13 +79,11 @@
       this.activeCalls = new Map();
       this.audioElements = new Map();
 
-      // Radar & Map state
-      this.radarAngle = 0;
+      // UI state
       this.isMapOpen = false;
       this.nearestPeer = null;
 
-      this.initUI();
-      this.initRadarUI();
+      this.initTopUI();
       this.initWorldMapModal();
       this.setupCleanup();
       this.waitForThreeScene();
@@ -100,12 +109,22 @@
       const check = setInterval(() => {
         if (window._scene && window._characters && window.THREE) {
           clearInterval(check);
-          console.log("[Cold World Multiplayer] 3D world ready! Starting network & world synchronization...");
+          console.log("[Cold World Multiplayer] 3D engine hooked! Connecting to live world mesh...");
           this.initMqttNetwork();
           this.initPeerVoice();
           this.startRenderLoop();
         }
       }, 500);
+    }
+
+    // Retrieve local player wardrobe
+    getLocalWardrobe() {
+      const localChar = window._characters?.mesh?._localObject;
+      const raw = localChar?.userData?.modelFiles;
+      if (Array.isArray(raw) && raw.length >= 4) {
+        return raw.map(f => f.startsWith("avatar/") ? f : `avatar/${f}`);
+      }
+      return DEFAULT_WARDROBE;
     }
 
     // --- Real-Time Universal Network (Phone + PC + Laptop Sync) ---
@@ -181,6 +200,7 @@
         id: this.myId,
         name: this.playerName,
         connectedAt: this.connectedAt,
+        modelFiles: this.getLocalWardrobe(),
         pos: pos,
         quat: quat
       };
@@ -198,18 +218,16 @@
       if (!data || data.id === this.myId) return;
 
       if (topic === "coldworld/global/presence") {
-        // --- 1. Automatic Host World Synchronization ---
         if (data.type === "join") {
           let p = this.peers.get(data.id);
           if (!p) {
             console.log(`[Cold World Multiplayer] Player joined: ${data.name} (${data.id})`);
-            p = this.createPeerRecord(data.id, data.name, data.pos, data.quat);
+            p = this.createPeerRecord(data.id, data.name, data.pos, data.quat, data.modelFiles);
             this.peers.set(data.id, p);
             this.updatePlayerListUI();
           }
 
-          // If we were connected before this joining player, we act as the Host Anchor!
-          // We transfer our exact world location so the joiner automatically spawns right next to us!
+          // Transfer host location to new joiner
           const localChar = window._characters?.mesh?._localObject;
           if (localChar) {
             console.log(`[Cold World] Transferring host world location to new joiner: ${data.name}`);
@@ -219,7 +237,8 @@
               hostId: this.myId,
               hostName: this.playerName,
               hostPos: [localChar.position.x, localChar.position.y, localChar.position.z],
-              hostQuat: [localChar.quaternion.x, localChar.quaternion.y, localChar.quaternion.z, localChar.quaternion.w]
+              hostQuat: [localChar.quaternion.x, localChar.quaternion.y, localChar.quaternion.z, localChar.quaternion.w],
+              modelFiles: this.getLocalWardrobe()
             };
             this.mqttClient.publish("coldworld/global/presence", JSON.stringify(syncMsg), { qos: 0 });
           }
@@ -229,7 +248,6 @@
           }
         }
         else if (data.type === "world_sync") {
-          // Received world synchronization from the host!
           if (data.targetId === this.myId && !this.hasSpawnSynced) {
             this.hasSpawnSynced = true;
             console.log(`[Cold World] Received Host World Sync from ${data.hostName}! Teleporting to host location...`);
@@ -239,7 +257,6 @@
               const THREE = window.THREE;
               const hPos = new THREE.Vector3(...data.hostPos);
               const up = hPos.clone().normalize();
-              // Spawn 2.2 meters to the side of the host
               const side = new THREE.Vector3(1, 0, 0).applyAxisAngle(up, Math.random() * Math.PI * 2).multiplyScalar(2.2);
               const spawnTarget = hPos.clone().add(side);
 
@@ -263,7 +280,7 @@
         else if (data.type === "hello" || data.type === "heartbeat") {
           let p = this.peers.get(data.id);
           if (!p) {
-            p = this.createPeerRecord(data.id, data.name, data.pos, data.quat);
+            p = this.createPeerRecord(data.id, data.name, data.pos, data.quat, data.modelFiles);
             this.peers.set(data.id, p);
             this.updatePlayerListUI();
           } else {
@@ -271,6 +288,9 @@
             if (data.name && data.name !== p.name) {
               p.name = data.name;
               this.updateBeaconNameTag(p.beaconGroup, p.name);
+            }
+            if (data.modelFiles && Array.isArray(data.modelFiles)) {
+              p.modelFiles = data.modelFiles;
             }
           }
         }
@@ -281,7 +301,7 @@
       else if (topic === "coldworld/global/state") {
         let p = this.peers.get(data.id);
         if (!p) {
-          p = this.createPeerRecord(data.id, data.name || "Courier", data.pos, data.quat);
+          p = this.createPeerRecord(data.id, data.name || "Courier", data.pos, data.quat, data.modelFiles);
           this.peers.set(data.id, p);
           this.updatePlayerListUI();
         }
@@ -300,12 +320,15 @@
           p.name = data.name;
           this.updateBeaconNameTag(p.beaconGroup, p.name);
         }
+        if (data.modelFiles && Array.isArray(data.modelFiles)) {
+          p.modelFiles = data.modelFiles;
+        }
 
         this.updateNativeCharacter(p);
       }
     }
 
-    createPeerRecord(id, name, initialPos = null, initialQuat = null) {
+    createPeerRecord(id, name, initialPos = null, initialQuat = null, modelFiles = null) {
       const THREE = window.THREE;
       const pos = new THREE.Vector3(0, 30, 0);
       const quat = new THREE.Quaternion();
@@ -313,14 +336,13 @@
       if (initialPos && initialPos.length === 3) pos.set(initialPos[0], initialPos[1], initialPos[2]);
       if (initialQuat && initialQuat.length === 4) quat.set(initialQuat[0], initialQuat[1], initialQuat[2], initialQuat[3]);
 
+      // Complete Wardrobe: base + hair + top + bottom + shoes
+      const wardrobe = (Array.isArray(modelFiles) && modelFiles.length >= 4)
+        ? modelFiles.map(f => f.startsWith("avatar/") ? f : `avatar/${f}`)
+        : DEFAULT_WARDROBE;
+
       // 1. Create High-Altitude Sky Beacon (Visible across planet curvature)
       const beaconGroup = this.createSkyBeacon(name, pos);
-
-      // 2. Create High-Fidelity 3D Courier Model
-      const avatarGroup = this.createCustomAvatar(name);
-      if (window._scene) {
-        window._scene.add(avatarGroup);
-      }
 
       const record = {
         id: id,
@@ -330,17 +352,16 @@
         currentPos: pos.clone(),
         currentQuat: quat.clone(),
         beaconGroup: beaconGroup,
-        avatarGroup: avatarGroup,
+        modelFiles: wardrobe,
         audioElement: this.audioElements.get(id) || null,
         analyser: null,
         isMoving: false,
         isSpeaking: false,
         distanceToLocal: 999,
-        animTime: 0,
         lastSeen: performance.now()
       };
 
-      // 3. Spawn native engine character
+      // 2. Spawn fully-dressed native character
       this.spawnNativeCharacter(record);
 
       return record;
@@ -355,9 +376,14 @@
       }
 
       if (!mesh._charactersObjects.has(peer.id)) {
+        // Complete wardrobe ensures full body, jacket, pants, shoes, and hair
+        const wardrobe = (peer.modelFiles && peer.modelFiles.length >= 4)
+          ? peer.modelFiles
+          : DEFAULT_WARDROBE;
+
         const charData = {
           bonesFile: "avatar/avatar-bones",
-          modelFiles: ["avatar/accessories/base"],
+          modelFiles: wardrobe,
           animationFiles: [
             "avatar/avatar-idle",
             "avatar/avatar-run",
@@ -377,7 +403,9 @@
           const obj = mesh._charactersObjects.get(peer.id);
           if (obj) {
             obj.scale.setScalar(1);
+            obj.userData.modelFiles = wardrobe;
           }
+          console.log(`[Cold World Multiplayer] Native courier spawned with full wardrobe:`, wardrobe);
         } catch (e) {
           console.warn("[Multiplayer] Native character spawn notice:", e);
         }
@@ -411,6 +439,14 @@
           obj.targetRotation.copy(peer.currentQuat);
           obj.prevRotation.copy(peer.currentQuat);
           obj.nextRotation.copy(peer.currentQuat);
+
+          // If peer clothes updated, reload batched geometries
+          if (peer.modelFiles && JSON.stringify(obj.userData.modelFiles) !== JSON.stringify(peer.modelFiles)) {
+            obj.userData.modelFiles = peer.modelFiles;
+            if (typeof mesh._loadBatchedGeometries === "function") {
+              try { mesh._loadBatchedGeometries(obj); } catch(e) {}
+            }
+          }
         }
       }
 
@@ -422,98 +458,40 @@
       });
     }
 
-    // --- High-Fidelity 3D Courier Avatar (Always Visible Everywhere) ---
-    createCustomAvatar(name) {
-      const THREE = window.THREE;
-      const g = new THREE.Group();
-      g.name = "CustomAvatar_" + name;
-
-      // Jacket (Courier Blue)
-      const jacketMat = new THREE.MeshStandardMaterial({ color: "#2563eb", roughness: 0.7, metalness: 0.1 });
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.72, 0.36), jacketMat);
-      body.position.y = 0.85;
-      body.castShadow = true;
-      body.receiveShadow = true;
-      g.add(body);
-
-      // Head & Cap
-      const skinMat = new THREE.MeshStandardMaterial({ color: "#fcd34d", roughness: 0.8, metalness: 0.05 });
-      const head = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.38, 0.38), skinMat);
-      head.position.y = 1.36;
-      head.castShadow = true;
-
-      const capMat = new THREE.MeshStandardMaterial({ color: "#1d4ed8", roughness: 0.6, metalness: 0.1 });
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.15, 0.42), capMat);
-      cap.position.set(0, 1.51, 0);
-      const visor = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.05, 0.22), capMat);
-      visor.position.set(0, 1.46, 0.22);
-      g.add(head, cap, visor);
-
-      // Backpack & Parcel
-      const packMat = new THREE.MeshStandardMaterial({ color: "#78350f", roughness: 0.85, metalness: 0.1 });
-      const pack = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.52, 0.26), packMat);
-      pack.position.set(0, 0.85, -0.28);
-
-      const parcelMat = new THREE.MeshStandardMaterial({ color: "#f59e0b", roughness: 0.8, metalness: 0.05 });
-      const parcel = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.24, 0.2), parcelMat);
-      parcel.position.set(0, 0.85, -0.45);
-      g.add(pack, parcel);
-
-      // Animated Limbs
-      const pantsMat = new THREE.MeshStandardMaterial({ color: "#0f172a", roughness: 0.8, metalness: 0.1 });
-      const legL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.6, 0.18), pantsMat);
-      legL.position.set(0.13, 0.3, 0);
-      const legR = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.6, 0.18), pantsMat);
-      legR.position.set(-0.13, 0.3, 0);
-      g.add(legL, legR);
-      g._legL = legL;
-      g._legR = legR;
-
-      const armL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.55, 0.14), jacketMat);
-      armL.position.set(0.34, 0.8, 0);
-      const armR = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.55, 0.14), jacketMat);
-      armR.position.set(-0.34, 0.8, 0);
-      g.add(armL, armR);
-      g._armL = armL;
-      g._armR = armR;
-
-      return g;
-    }
-
-    // --- High-Altitude Sky Beacon (Visible over the planet horizon) ---
+    // --- High-Altitude Sky Beacon (Visible over planet curvature) ---
     createSkyBeacon(name, pos) {
       const THREE = window.THREE;
       const g = new THREE.Group();
       g.name = "SkyBeacon_" + name;
 
       // 1. Vertical Light Pillar (35 units tall, reaching into stratosphere)
-      const beamGeo = new THREE.BoxGeometry(0.32, 35, 0.32);
+      const beamGeo = new THREE.BoxGeometry(0.3, 35, 0.3);
       const beamMat = new THREE.MeshBasicMaterial({
         color: "#38bdf8",
         transparent: true,
-        opacity: 0.85,
+        opacity: 0.8,
         depthWrite: false
       });
       const beam = new THREE.Mesh(beamGeo, beamMat);
       beam.position.y = 17.5;
       g.add(beam);
 
-      // 2. Glowing Apex Crystal at top of pillar
-      const apexGeo = new THREE.SphereGeometry(0.85, 6, 6);
+      // 2. Glowing Apex Crystal
+      const apexGeo = new THREE.SphereGeometry(0.8, 6, 6);
       const apexMat = new THREE.MeshBasicMaterial({ color: "#67e8f9" });
       const apex = new THREE.Mesh(apexGeo, apexMat);
       apex.position.y = 35;
       g.add(apex);
 
       // 3. Ground Landing Ring
-      const ringGeo = new THREE.PlaneGeometry(2.6, 2.6);
-      const ringMat = new THREE.MeshBasicMaterial({ color: "#38bdf8", transparent: true, opacity: 0.6, depthWrite: false });
+      const ringGeo = new THREE.PlaneGeometry(2.4, 2.4);
+      const ringMat = new THREE.MeshBasicMaterial({ color: "#38bdf8", transparent: true, opacity: 0.55, depthWrite: false });
       const ring = new THREE.Mesh(ringGeo, ringMat);
       ring.rotation.x = -Math.PI / 2;
       ring.position.y = 0.05;
       g.add(ring);
 
-      // 4. 3D Billboard Name Tag & Live Distance Badge
+      // 4. 3D Billboard Name Tag
       const nameTag = this.createNameTagSprite(name, "0m");
       nameTag.position.y = 2.4;
       g.add(nameTag);
@@ -629,9 +607,6 @@
       if (p) {
         if (p.beaconGroup && p.beaconGroup.parent) {
           p.beaconGroup.parent.remove(p.beaconGroup);
-        }
-        if (p.avatarGroup && p.avatarGroup.parent) {
-          p.avatarGroup.parent.remove(p.avatarGroup);
         }
         if (window._characters?.mesh) {
           try {
@@ -904,6 +879,7 @@
           name: this.playerName,
           pos: [localChar.position.x, localChar.position.y, localChar.position.z],
           quat: [localChar.quaternion.x, localChar.quaternion.y, localChar.quaternion.z, localChar.quaternion.w],
+          modelFiles: this.getLocalWardrobe(),
           isMoving: isMoving
         };
         this.mqttClient.publish("coldworld/global/state", JSON.stringify(stateMsg), { qos: 0 });
@@ -934,26 +910,6 @@
         if (dist < minDistance) {
           minDistance = dist;
           closestPeer = p;
-        }
-
-        // Update Custom Avatar (Courier Mesh)
-        if (p.avatarGroup) {
-          p.avatarGroup.position.copy(p.currentPos);
-          p.avatarGroup.quaternion.copy(p.currentQuat);
-
-          if (p.isMoving) {
-            p.animTime += 0.25;
-            const swing = Math.sin(p.animTime) * 0.45;
-            if (p.avatarGroup._legL) p.avatarGroup._legL.rotation.x = swing;
-            if (p.avatarGroup._legR) p.avatarGroup._legR.rotation.x = -swing;
-            if (p.avatarGroup._armL) p.avatarGroup._armL.rotation.x = -swing;
-            if (p.avatarGroup._armR) p.avatarGroup._armR.rotation.x = swing;
-          } else {
-            if (p.avatarGroup._legL) p.avatarGroup._legL.rotation.x = 0;
-            if (p.avatarGroup._legR) p.avatarGroup._legR.rotation.x = 0;
-            if (p.avatarGroup._armL) p.avatarGroup._armL.rotation.x = 0;
-            if (p.avatarGroup._armR) p.avatarGroup._armR.rotation.x = 0;
-          }
         }
 
         // Position Sky Beacon
@@ -998,89 +954,142 @@
 
       this.nearestPeer = closestPeer;
       this.updateTrackerUI();
-      this.renderRadar();
     }
 
-    // --- Live Mini-Map & Radar UI ---
-    initRadarUI() {
-      const radarWrapper = document.createElement("div");
-      radarWrapper.id = "cw-radar-container";
-      radarWrapper.style.cssText = `
+    // --- Clean Top Header UI (Zero Obstruction for Phone Touch Controls) ---
+    initTopUI() {
+      const container = document.createElement("div");
+      container.id = "cw-multiplayer-hud";
+      container.style.cssText = `
         position: fixed;
-        bottom: 20px;
-        right: 20px;
+        top: 12px;
+        left: 14px;
         z-index: 999999;
         display: flex;
-        flex-direction: column;
         align-items: center;
-        gap: 8px;
-        user-select: none;
+        gap: 7px;
+        flex-wrap: wrap;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-size: 12px;
+        user-select: none;
       `;
 
-      const canvas = document.createElement("canvas");
-      canvas.id = "cw-radar-canvas";
-      canvas.width = 136;
-      canvas.height = 136;
-      canvas.style.cssText = `
-        width: 136px;
-        height: 136px;
-        border-radius: 50%;
-        background: radial-gradient(circle, rgba(15, 23, 42, 0.92) 0%, rgba(3, 7, 18, 0.96) 100%);
-        border: 2px solid rgba(56, 189, 248, 0.45);
-        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6), inset 0 0 16px rgba(56, 189, 248, 0.15);
+      // Status Badge
+      const statusBadge = document.createElement("div");
+      statusBadge.id = "cw-status-badge";
+      statusBadge.title = "Universal Live World (Phone, PC & Laptop Cross-Play)";
+      statusBadge.style.cssText = `
+        background: rgba(15, 23, 42, 0.88);
+        backdrop-filter: blur(10px);
+        color: #f8fafc;
+        padding: 6px 12px;
+        border-radius: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      `;
+      statusBadge.innerHTML = `<span id="cw-status-text">🟡 Connecting...</span>`;
+
+      // Mic Button
+      const micBtn = document.createElement("button");
+      micBtn.id = "cw-mic-btn";
+      micBtn.title = "Toggle Proximity Voice Chat (Hotkey: V)";
+      micBtn.style.cssText = `
+        background: rgba(239, 68, 68, 0.88);
+        backdrop-filter: blur(10px);
+        color: white;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-weight: 700;
         cursor: pointer;
-        transition: transform 0.15s, border-color 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+        transition: transform 0.1s, background 0.2s, box-shadow 0.2s;
       `;
-      canvas.title = "Cold World Radar: Click or Press [M] to Open World Map";
-      canvas.onclick = () => this.toggleWorldMap();
-      this.radarCanvas = canvas;
-      this.radarCtx = canvas.getContext("2d");
+      micBtn.innerHTML = `<span>🔇 Mic: OFF</span> <span style="font-size:9px;opacity:0.8;">[V]</span>`;
+      micBtn.onclick = () => this.toggleMic();
 
+      // World Map Button (Located in Top Bar, safe from phone thumb controls!)
+      const mapBtn = document.createElement("button");
+      mapBtn.id = "cw-map-btn";
+      mapBtn.title = "Open World Map & NPC Tracker (Hotkey: M)";
+      mapBtn.style.cssText = `
+        background: rgba(14, 165, 233, 0.9);
+        backdrop-filter: blur(10px);
+        color: white;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        padding: 6px 13px;
+        border-radius: 20px;
+        font-weight: 700;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+        transition: transform 0.1s, background 0.2s;
+      `;
+      mapBtn.innerHTML = `<span>🗺️ Map</span> <span style="font-size:9px;opacity:0.85;">[M]</span>`;
+      mapBtn.onclick = () => this.toggleWorldMap();
+
+      // Change Name Button
+      const settingsBtn = document.createElement("button");
+      settingsBtn.id = "cw-settings-btn";
+      settingsBtn.title = "Change your Courier Name";
+      settingsBtn.style.cssText = `
+        background: rgba(15, 23, 42, 0.85);
+        backdrop-filter: blur(8px);
+        color: #e2e8f0;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        padding: 6px 11px;
+        border-radius: 20px;
+        font-weight: 600;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      `;
+      settingsBtn.innerHTML = `<span>⚙️ Name</span>`;
+      settingsBtn.onclick = () => this.openSettings();
+
+      container.appendChild(statusBadge);
+      container.appendChild(micBtn);
+      container.appendChild(mapBtn);
+      container.appendChild(settingsBtn);
+      document.body.appendChild(container);
+
+      // Nearest Player Tracker Card (Anchored right below the top bar!)
       const tracker = document.createElement("div");
       tracker.id = "cw-tracker-card";
       tracker.style.cssText = `
+        position: fixed;
+        top: 48px;
+        left: 14px;
+        z-index: 999999;
         display: none;
         background: rgba(15, 23, 42, 0.92);
         backdrop-filter: blur(10px);
-        border: 1px solid rgba(56, 189, 248, 0.35);
+        border: 1px solid rgba(56, 189, 248, 0.4);
         border-radius: 14px;
-        padding: 5px 10px;
+        padding: 4px 10px;
         font-size: 11px;
         font-weight: 700;
         color: #f8fafc;
         align-items: center;
         gap: 6px;
         box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       `;
+      document.body.appendChild(tracker);
       this.trackerCard = tracker;
 
-      const mapBtn = document.createElement("button");
-      mapBtn.id = "cw-map-btn";
-      mapBtn.style.cssText = `
-        background: rgba(15, 23, 42, 0.88);
-        backdrop-filter: blur(8px);
-        color: #38bdf8;
-        border: 1px solid rgba(56, 189, 248, 0.35);
-        border-radius: 20px;
-        padding: 4px 12px;
-        font-size: 11px;
-        font-weight: 700;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-        transition: background 0.2s, transform 0.1s;
-      `;
-      mapBtn.innerHTML = `<span>🗺️ World Map</span> <span style="opacity:0.75;font-size:9px;">[M]</span>`;
-      mapBtn.onclick = () => this.toggleWorldMap();
-
-      radarWrapper.appendChild(tracker);
-      radarWrapper.appendChild(canvas);
-      radarWrapper.appendChild(mapBtn);
-      document.body.appendChild(radarWrapper);
-
+      // Keyboard hotkeys
       window.addEventListener("keydown", (e) => {
         if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
         if (e.key === "m" || e.key === "M") {
@@ -1091,132 +1100,6 @@
           this.closeWorldMap();
         }
       });
-    }
-
-    renderRadar() {
-      const ctx = this.radarCtx;
-      if (!ctx) return;
-      const w = this.radarCanvas.width;
-      const h = this.radarCanvas.height;
-      const cx = w / 2;
-      const cy = h / 2;
-      const radius = cx - 4;
-
-      ctx.clearRect(0, 0, w, h);
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      ctx.clip();
-
-      // Range Rings (15m, 30m, 50m)
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.15)";
-      ctx.lineWidth = 1;
-      [0.35, 0.65, 0.95].forEach(scale => {
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius * scale, 0, Math.PI * 2);
-        ctx.stroke();
-      });
-
-      // Crosshairs
-      ctx.beginPath();
-      ctx.moveTo(cx, cy - radius);
-      ctx.lineTo(cx, cy + radius);
-      ctx.moveTo(cx - radius, cy);
-      ctx.lineTo(cx + radius, cy);
-      ctx.stroke();
-
-      // Rotating sweep
-      this.radarAngle = (this.radarAngle + 0.035) % (Math.PI * 2);
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(this.radarAngle);
-      const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, radius);
-      grad.addColorStop(0, "rgba(56, 189, 248, 0.25)");
-      grad.addColorStop(1, "rgba(56, 189, 248, 0.0)");
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.arc(0, 0, radius, 0, 0.5);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-
-      const localChar = window._characters?.mesh?._localObject;
-      const localPos = localChar?.position;
-      const cam = window._camera;
-
-      if (localPos && cam) {
-        const forward = new window.THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
-        const up = localPos.clone().normalize();
-        const tangentForward = forward.clone().sub(up.clone().multiplyScalar(forward.dot(up))).normalize();
-        const tangentRight = new window.THREE.Vector3().crossVectors(tangentForward, up).normalize();
-
-        const radarRange = 45;
-
-        // Draw NPCs on Radar (Amber Diamonds)
-        KNOWN_NPCS.forEach(npc => {
-          const npcVec = new window.THREE.Vector3(...npc.pos);
-          const diff = npcVec.clone().sub(localPos);
-          const dist = diff.length();
-          if (dist < radarRange) {
-            const xProj = diff.dot(tangentRight);
-            const zProj = -diff.dot(tangentForward);
-            const px = cx + (xProj / radarRange) * (radius * 0.88);
-            const py = cy + (zProj / radarRange) * (radius * 0.88);
-
-            ctx.fillStyle = "#f59e0b";
-            ctx.beginPath();
-            ctx.arc(px, py, 2.5, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        });
-
-        // Draw Remote Players on Radar (Bright Cyan Pulsing Dots)
-        this.peers.forEach(peer => {
-          const diff = peer.pos.clone().sub(localPos);
-          const dist = diff.length();
-          const xProj = diff.dot(tangentRight);
-          const zProj = -diff.dot(tangentForward);
-          const norm = Math.hypot(xProj, zProj) || 1;
-          const displayDist = Math.min(radius * 0.85, (dist / radarRange) * (radius * 0.85));
-          const px = cx + (xProj / norm) * displayDist;
-          const py = cy + (zProj / norm) * displayDist;
-
-          ctx.fillStyle = "rgba(56, 189, 248, 0.35)";
-          ctx.beginPath();
-          ctx.arc(px, py, 6, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.fillStyle = "#38bdf8";
-          ctx.beginPath();
-          ctx.arc(px, py, 3.5, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.fillStyle = "#ffffff";
-          ctx.font = "bold 8px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText(peer.name.slice(0, 10), px, py - 6);
-        });
-
-        // Local Player Icon (Green Arrow pointing forward)
-        ctx.fillStyle = "#22c55e";
-        ctx.beginPath();
-        ctx.moveTo(cx, cy - 6);
-        ctx.lineTo(cx - 4, cy + 4);
-        ctx.lineTo(cx, cy + 2);
-        ctx.lineTo(cx + 4, cy + 4);
-        ctx.closePath();
-        ctx.fill();
-      }
-
-      ctx.restore();
-
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.6)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      ctx.stroke();
     }
 
     updateTrackerUI() {
@@ -1253,7 +1136,7 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        padding: 20px;
+        padding: 16px;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         color: #f8fafc;
         user-select: none;
@@ -1278,7 +1161,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 16px 20px;
+        padding: 14px 18px;
         border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         background: rgba(30, 41, 59, 0.5);
       `;
@@ -1286,8 +1169,8 @@
         <div style="display:flex;align-items:center;gap:10px;">
           <span style="font-size:22px;">🗺️</span>
           <div>
-            <div style="font-size:16px;font-weight:700;color:#f8fafc;">Cold World Map & Live Synchronizer</div>
-            <div style="font-size:11px;color:#94a3b8;">Spherical World Topography • All NPCs & Online Players</div>
+            <div style="font-size:15px;font-weight:700;color:#f8fafc;">Cold World Map & Live Synchronizer</div>
+            <div style="font-size:11px;color:#94a3b8;">Topography • All NPCs & Online Players</div>
           </div>
         </div>
         <button id="cw-close-map" style="background:rgba(255,255,255,0.1);border:none;color:#fff;width:32px;height:32px;border-radius:50%;font-size:16px;cursor:pointer;font-weight:700;">✕</button>
@@ -1491,7 +1374,7 @@
         if (this.peers.size === 0) {
           playersHtml += `
             <div style="padding:12px;background:rgba(15,23,42,0.6);border-radius:10px;font-size:11px;color:#94a3b8;line-height:1.4;">
-              Waiting for other players to join! When someone opens the game on Phone or Laptop, their location automatically transfers and syncs right next to you!
+              Waiting for other players to join! As soon as someone opens the game on Phone or Laptop, their location automatically transfers and syncs right next to you!
             </div>
           `;
         } else {
@@ -1540,88 +1423,6 @@
       }
     }
 
-    // --- HUD Status and Voice UI ---
-    initUI() {
-      const container = document.createElement("div");
-      container.id = "cw-multiplayer-hud";
-      container.style.cssText = `
-        position: fixed;
-        top: 14px;
-        left: 16px;
-        z-index: 999999;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        font-size: 13px;
-        user-select: none;
-      `;
-
-      const statusBadge = document.createElement("div");
-      statusBadge.id = "cw-status-badge";
-      statusBadge.title = "Universal Live World (Phone, PC & Laptop Cross-Play)";
-      statusBadge.style.cssText = `
-        background: rgba(15, 23, 42, 0.88);
-        backdrop-filter: blur(10px);
-        color: #f8fafc;
-        padding: 6px 14px;
-        border-radius: 20px;
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-        font-weight: 600;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      `;
-      statusBadge.innerHTML = `<span id="cw-status-text">🟡 Connecting...</span>`;
-
-      const micBtn = document.createElement("button");
-      micBtn.id = "cw-mic-btn";
-      micBtn.title = "Toggle Proximity Voice Chat (Hotkey: V)";
-      micBtn.style.cssText = `
-        background: rgba(239, 68, 68, 0.88);
-        backdrop-filter: blur(10px);
-        color: white;
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        padding: 6px 13px;
-        border-radius: 20px;
-        font-weight: 700;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-        transition: transform 0.1s, background 0.2s, box-shadow 0.2s;
-      `;
-      micBtn.innerHTML = `<span>🔇 Mic: OFF</span> <span style="font-size:10px;opacity:0.8;">[V]</span>`;
-      micBtn.onclick = () => this.toggleMic();
-
-      const settingsBtn = document.createElement("button");
-      settingsBtn.id = "cw-settings-btn";
-      settingsBtn.title = "Change your Courier Name";
-      settingsBtn.style.cssText = `
-        background: rgba(15, 23, 42, 0.85);
-        backdrop-filter: blur(8px);
-        color: #e2e8f0;
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        padding: 6px 11px;
-        border-radius: 20px;
-        font-weight: 600;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 5px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-      `;
-      settingsBtn.innerHTML = `<span>⚙️ Name</span>`;
-      settingsBtn.onclick = () => this.openSettings();
-
-      container.appendChild(statusBadge);
-      container.appendChild(micBtn);
-      container.appendChild(settingsBtn);
-      document.body.appendChild(container);
-    }
-
     openSettings() {
       const newName = prompt("Enter your Courier name:", this.playerName);
       if (newName && newName.trim()) {
@@ -1644,10 +1445,10 @@
       if (btn) {
         if (this.isMicMuted) {
           btn.style.background = "rgba(239, 68, 68, 0.85)";
-          btn.innerHTML = `<span>🔇 Mic: MUTED</span> <span style="font-size:10px;opacity:0.8;">[V]</span>`;
+          btn.innerHTML = `<span>🔇 Mic: MUTED</span> <span style="font-size:9px;opacity:0.8;">[V]</span>`;
         } else {
           btn.style.background = "rgba(34, 197, 94, 0.9)";
-          btn.innerHTML = `<span>🎙️ Mic: LIVE</span> <span style="font-size:10px;opacity:0.8;">[V]</span>`;
+          btn.innerHTML = `<span>🎙️ Mic: LIVE</span> <span style="font-size:9px;opacity:0.8;">[V]</span>`;
         }
       }
     }
