@@ -1,20 +1,20 @@
 // ============================================================================
-// Cold World - Real-Time 3D Multiplayer & Proximity Voice Chat Engine
+// Cold World - Direct Seamless Global Multiplayer & Spatial Voice Chat Engine
 // Powered by WebRTC & PeerJS for zero-backend static deployment (GitHub Pages)
-// Supports up to 10 simultaneous players per room with 3D avatars & spatial audio
+// Everyone automatically and directly joins the same shared world without any links!
 // ============================================================================
 
 (function() {
-  console.log("[Cold World Multiplayer] Initializing engine...");
+  console.log("[Cold World Multiplayer] Initializing direct global multiplayer...");
 
   class MultiplayerEngine {
     constructor() {
       this.maxPlayers = 10;
       this.peers = new Map(); // peerId -> { conn, call, avatar, audioElement, analyser, name, pos, quat, isMoving }
+      this.audioElements = new Map(); // peerId -> HTMLAudioElement
       this.peer = null;
       this.mySlot = -1;
       this.myPeerId = null;
-      this.room = this.getRoomFromURL() || "cold-world-plaza";
       this.playerName = localStorage.getItem("cw_player_name") || ("Courier_" + Math.floor(100 + Math.random() * 900));
       this.localStream = null;
       this.isMicMuted = true;
@@ -24,52 +24,61 @@
       this.lastBroadcast = 0;
       this.broadcastInterval = 40; // 25 Hz
       this.activeCalls = new Map(); // peerId -> call
-      this.slotCheckInterval = null;
+      this.scanInterval = null;
 
       this.initUI();
+      this.setupCleanup();
       this.waitForThreeScene();
     }
 
-    getRoomFromURL() {
-      try {
-        const params = new URLSearchParams(window.location.search);
-        return params.get("room") || null;
-      } catch (e) {
-        return null;
-      }
+    setupCleanup() {
+      // Cleanly destroy PeerJS session on tab close or refresh to immediately free the slot
+      window.addEventListener("beforeunload", () => {
+        if (this.peer && !this.peer.destroyed) {
+          this.peer.destroy();
+        }
+      });
+      window.addEventListener("pagehide", () => {
+        if (this.peer && !this.peer.destroyed) {
+          this.peer.destroy();
+        }
+      });
     }
 
     waitForThreeScene() {
       const check = setInterval(() => {
         if (window._scene && window._characters && window.THREE) {
           clearInterval(check);
-          console.log("[Cold World Multiplayer] 3D world ready! Joining network...");
+          console.log("[Cold World Multiplayer] 3D world ready! Connecting directly to global live world...");
           this.initNetwork();
           this.startRenderLoop();
         }
       }, 500);
     }
 
-    // --- PeerJS Mesh Network ---
+    // --- Direct Automatic Global Room Connection ---
     initNetwork() {
       if (typeof Peer === "undefined") {
-        console.warn("[Cold World Multiplayer] PeerJS not loaded yet, retrying...");
+        console.warn("[Cold World Multiplayer] PeerJS loading, retrying in 1s...");
         setTimeout(() => this.initNetwork(), 1000);
         return;
       }
 
-      this.updateStatusUI("Joining room...", "#f59e0b");
+      this.updateStatusUI("Joining Live World...", "#f59e0b");
       this.findAvailableSlot(0);
     }
 
-    findAvailableSlot(slot) {
+    findAvailableSlot(slot = 0) {
       if (slot >= this.maxPlayers) {
-        this.updateStatusUI(`Room full (10/${this.maxPlayers})`, "#ef4444");
+        this.updateStatusUI("World Full (10/10 Players)", "#ef4444");
+        // Retry slot 0 after 4s in case an existing player disconnected
+        setTimeout(() => this.findAvailableSlot(0), 4000);
         return;
       }
 
-      const testId = `cw_${this.cleanRoom(this.room)}_${slot}`;
-      const tempPeer = new Peer(testId, {
+      const slotId = `cw_world_courier_${slot}`;
+
+      const tempPeer = new Peer(slotId, {
         debug: 1,
         config: {
           iceServers: [
@@ -83,44 +92,40 @@
         this.mySlot = slot;
         this.myPeerId = id;
         this.peer = tempPeer;
-        console.log(`[Cold World Multiplayer] Joined as Slot #${slot} (${id}) in room '${this.room}'`);
+        console.log(`[Cold World Multiplayer] Directly connected to global world as Courier #${slot}`);
         this.setupPeerEvents();
-        this.connectToOtherSlots();
+        this.scanAllSlots();
 
-        // Periodically probe for new players that join other slots
-        if (this.slotCheckInterval) clearInterval(this.slotCheckInterval);
-        this.slotCheckInterval = setInterval(() => {
-          this.connectToOtherSlots();
-        }, 4000);
+        // Continuously scan for new players joining other slots every 3.5s
+        if (this.scanInterval) clearInterval(this.scanInterval);
+        this.scanInterval = setInterval(() => this.scanAllSlots(), 3500);
       });
 
       tempPeer.on("error", (err) => {
         if (err.type === "unavailable-id") {
           tempPeer.destroy();
+          // Slot already in use by another active player, claim next slot
           this.findAvailableSlot(slot + 1);
         } else if (err.type === "peer-unavailable") {
           // Expected when probing slots that are currently empty
         } else {
-          console.warn("[Cold World Multiplayer] Peer warning:", err.type);
+          console.warn("[Cold World Multiplayer] Peer notice:", err.type);
         }
       });
-    }
-
-    cleanRoom(r) {
-      return r.toLowerCase().replace(/[^a-z0-9_-]/g, "");
     }
 
     setupPeerEvents() {
       this.updatePlayerListUI();
 
-      // Incoming data connections
+      // Handle incoming data connections from other players
       this.peer.on("connection", (conn) => {
-        this.handleIncomingConnection(conn);
+        console.log("[Cold World Multiplayer] Incoming connection from:", conn.peer);
+        this.setupConnectionHandlers(conn);
       });
 
-      // Incoming voice calls
+      // Handle incoming voice calls
       this.peer.on("call", (call) => {
-        console.log("[Cold World Voice] Incoming voice call from", call.peer);
+        console.log("[Cold World Voice] Incoming voice call from:", call.peer);
         if (this.localStream) {
           call.answer(this.localStream);
         } else {
@@ -139,18 +144,18 @@
         if (err.type === "peer-unavailable" || err.type === "unavailable-id") {
           return;
         }
-        console.warn("[Cold World Multiplayer] Network notice:", err.type);
+        console.warn("[Cold World Multiplayer] Network status:", err.type);
       });
     }
 
-    connectToOtherSlots() {
+    scanAllSlots() {
       if (!this.peer || this.peer.destroyed) return;
 
       for (let s = 0; s < this.maxPlayers; s++) {
         if (s === this.mySlot) continue;
-        const targetId = `cw_${this.cleanRoom(this.room)}_${s}`;
+        const targetId = `cw_world_courier_${s}`;
         
-        // Skip if already connected to this peer
+        // Skip if already connected
         if (this.peers.has(targetId)) continue;
 
         const conn = this.peer.connect(targetId, {
@@ -160,23 +165,23 @@
       }
     }
 
-    handleIncomingConnection(conn) {
-      this.setupConnectionHandlers(conn);
-    }
-
     setupConnectionHandlers(conn) {
-      conn.on("open", () => {
-        console.log("[Cold World Multiplayer] Connected to player:", conn.peer);
+      const onOpen = () => {
         if (this.peers.has(conn.peer)) return;
+        console.log("[Cold World Multiplayer] Established connection with:", conn.peer);
+
+        const localChar = window._characters?.mesh?._localObject;
+        const initialPos = localChar ? localChar.position.clone() : new window.THREE.Vector3(0, 30, 0);
+        const initialQuat = localChar ? localChar.quaternion.clone() : new window.THREE.Quaternion();
 
         const remotePeerData = {
           conn: conn,
           name: conn.metadata?.name || ("Courier_" + conn.peer.slice(-3)),
           avatar: this.createRemoteAvatar(conn.metadata?.name),
-          audioElement: null,
+          audioElement: this.audioElements.get(conn.peer) || null,
           analyser: null,
-          pos: new window.THREE.Vector3(0, 30, 0),
-          quat: new window.THREE.Quaternion(),
+          pos: initialPos,
+          quat: initialQuat,
           isMoving: false,
           isSpeaking: false,
           animTime: 0,
@@ -186,14 +191,28 @@
         this.peers.set(conn.peer, remotePeerData);
         this.updatePlayerListUI();
 
-        // Immediately send local state to newly connected peer
-        this.broadcastLocalState(conn);
+        // Immediately send handshake with local player's position
+        if (localChar) {
+          conn.send({
+            type: "handshake",
+            name: this.playerName,
+            pos: [localChar.position.x, localChar.position.y, localChar.position.z],
+            quat: [localChar.quaternion.x, localChar.quaternion.y, localChar.quaternion.z, localChar.quaternion.w]
+          });
+        }
 
-        // If mic is live, initiate voice call
+        // If our microphone is live, call the peer
         if (this.localStream && !this.activeCalls.has(conn.peer)) {
           this.callPeer(conn.peer);
         }
-      });
+      };
+
+      // Support both immediate open and delayed open event
+      if (conn.open) {
+        onOpen();
+      } else {
+        conn.on("open", onOpen);
+      }
 
       conn.on("data", (data) => {
         this.handlePeerData(conn.peer, data);
@@ -236,6 +255,27 @@
       const p = this.peers.get(peerId);
       if (!p) return;
 
+      if (data.type === "handshake") {
+        if (data.name) {
+          p.name = data.name;
+          this.updateAvatarNameTag(p.avatar, p.name);
+          this.updatePlayerListUI();
+        }
+        if (data.pos && data.pos.length === 3) {
+          p.pos.set(data.pos[0], data.pos[1], data.pos[2]);
+          p.avatar.position.copy(p.pos);
+          p.avatar.visible = true;
+          p.hasReceivedFirstState = true;
+        }
+        if (data.quat && data.quat.length === 4) {
+          p.quat.set(data.quat[0], data.quat[1], data.quat[2], data.quat[3]);
+          p.avatar.quaternion.copy(p.quat);
+        }
+        // Respond with our current state so both players are instantly synchronized
+        this.broadcastLocalState(p.conn);
+        return;
+      }
+
       if (data.type === "state") {
         if (data.pos && data.pos.length === 3) {
           p.pos.set(data.pos[0], data.pos[1], data.pos[2]);
@@ -268,18 +308,20 @@
         if (p.avatar && p.avatar.parent) {
           p.avatar.parent.remove(p.avatar);
         }
-        if (p.audioElement) {
-          p.audioElement.srcObject = null;
-          p.audioElement.remove();
-        }
-        const call = this.activeCalls.get(peerId);
-        if (call) {
-          try { call.close(); } catch(e) {}
-          this.activeCalls.delete(peerId);
-        }
         this.peers.delete(peerId);
-        this.updatePlayerListUI();
       }
+      const audioEl = this.audioElements.get(peerId);
+      if (audioEl) {
+        audioEl.srcObject = null;
+        audioEl.remove();
+        this.audioElements.delete(peerId);
+      }
+      const call = this.activeCalls.get(peerId);
+      if (call) {
+        try { call.close(); } catch(e) {}
+        this.activeCalls.delete(peerId);
+      }
+      this.updatePlayerListUI();
     }
 
     // --- 3D Avatar Creation & Rendering ---
@@ -437,7 +479,6 @@
     async enableMic() {
       try {
         if (!this.localStream) {
-          // Standard audio capture with crisp echo cancellation & noise suppression
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
               echoCancellation: true,
@@ -500,7 +541,7 @@
         try { existingCall.close(); } catch(e) {}
       }
 
-      console.log("[Cold World Voice] Calling peer:", peerId);
+      console.log("[Cold World Voice] Calling player:", peerId);
       const call = this.peer.call(peerId, this.localStream);
       if (call) {
         this.activeCalls.set(peerId, call);
@@ -510,18 +551,15 @@
 
     setupCall(call) {
       call.on("stream", (remoteStream) => {
-        console.log("[Cold World Voice] Audio stream received from:", call.peer);
-        const p = this.peers.get(call.peer);
-        if (!p) return;
+        console.log("[Cold World Voice] Received voice stream from:", call.peer);
 
-        // Clean HTML5 Audio element for 100% reliable cross-browser voice playback
-        let audioEl = p.audioElement;
+        let audioEl = this.audioElements.get(call.peer);
         if (!audioEl) {
           audioEl = document.createElement("audio");
           audioEl.autoplay = true;
           audioEl.playsInline = true;
           document.body.appendChild(audioEl);
-          p.audioElement = audioEl;
+          this.audioElements.set(call.peer, audioEl);
         }
 
         audioEl.srcObject = remoteStream;
@@ -529,7 +567,12 @@
           console.warn("[Voice Autoplay]", e);
         });
 
-        // Remote Voice Activity Detection
+        const p = this.peers.get(call.peer);
+        if (p) {
+          p.audioElement = audioEl;
+        }
+
+        // Voice Activity Detection for speaker icon
         try {
           const AudioCtx = window.AudioContext || window.webkitAudioContext;
           this.audioCtx = this.audioCtx || new AudioCtx();
@@ -540,14 +583,16 @@
           const analyser = this.audioCtx.createAnalyser();
           analyser.fftSize = 64;
           src.connect(analyser);
-          p.analyser = analyser;
+          if (p) p.analyser = analyser;
         } catch(e) {}
       });
 
       call.on("close", () => {
-        const p = this.peers.get(call.peer);
-        if (p && p.audioElement) {
-          p.audioElement.srcObject = null;
+        const audioEl = this.audioElements.get(call.peer);
+        if (audioEl) {
+          audioEl.srcObject = null;
+          audioEl.remove();
+          this.audioElements.delete(call.peer);
         }
         this.activeCalls.delete(call.peer);
       });
@@ -567,7 +612,7 @@
       const localChar = window._characters?.mesh?._localObject;
       if (!localChar) return;
 
-      // 1. Broadcast local player position & orientation
+      // 1. Broadcast local player position & orientation at ~25Hz
       if (now - this.lastBroadcast > this.broadcastInterval && this.peers.size > 0) {
         this.lastBroadcast = now;
         this.broadcastLocalState();
@@ -621,14 +666,15 @@
         }
 
         // Proximity 3D Voice Volume Attenuation
-        if (p.audioElement) {
+        const audioEl = p.audioElement || this.audioElements.get(p.conn?.peer);
+        if (audioEl) {
           const dist = localPos.distanceTo(p.avatar.position);
           // Full volume up to 12m, smooth falloff up to 75m, with audible presence everywhere
           let vol = 1.0;
           if (dist > 12.0) {
             vol = Math.max(0.15, 1.0 - (dist - 12.0) / 63.0);
           }
-          p.audioElement.volume = Math.min(1.0, Math.max(0.0, vol));
+          audioEl.volume = Math.min(1.0, Math.max(0.0, vol));
         }
 
         // Remote Voice Activity Detection
@@ -662,10 +708,10 @@
         user-select: none;
       `;
 
-      // Status Badge
+      // Status Badge (Shows Live Players in World)
       const statusBadge = document.createElement("div");
       statusBadge.id = "cw-status-badge";
-      statusBadge.title = "Multiplayer status";
+      statusBadge.title = "Direct Live Multiplayer World";
       statusBadge.style.cssText = `
         background: rgba(15, 23, 42, 0.88);
         backdrop-filter: blur(10px);
@@ -679,7 +725,7 @@
         align-items: center;
         gap: 6px;
       `;
-      statusBadge.innerHTML = `<span id="cw-status-text">🟡 Joining Room...</span>`;
+      statusBadge.innerHTML = `<span id="cw-status-text">🟡 Joining Live World...</span>`;
 
       // Mic Button
       const micBtn = document.createElement("button");
@@ -703,48 +749,29 @@
       micBtn.innerHTML = `<span>🔇 Mic: OFF</span> <span style="font-size:10px;opacity:0.8;">[M]</span>`;
       micBtn.onclick = () => this.toggleMic();
 
-      // Invite Friends Button
-      const roomBtn = document.createElement("button");
-      roomBtn.id = "cw-room-btn";
-      roomBtn.title = "Click to copy invite link";
-      roomBtn.style.cssText = `
-        background: rgba(15, 23, 42, 0.88);
-        backdrop-filter: blur(10px);
-        color: #38bdf8;
-        border: 1px solid rgba(56, 189, 248, 0.4);
-        padding: 6px 13px;
-        border-radius: 20px;
-        font-weight: 600;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-        transition: transform 0.1s, background 0.2s;
-      `;
-      roomBtn.innerHTML = `<span>🔗 Invite Friends</span> <span style="font-size:11px;opacity:0.85;">(${this.room})</span>`;
-      roomBtn.onclick = () => this.copyInviteLink();
-
-      // Change Name / Room Button
+      // Change Name Button
       const settingsBtn = document.createElement("button");
       settingsBtn.id = "cw-settings-btn";
-      settingsBtn.title = "Change your courier name or room";
+      settingsBtn.title = "Change your Courier Name";
       settingsBtn.style.cssText = `
         background: rgba(15, 23, 42, 0.85);
         backdrop-filter: blur(8px);
         color: #e2e8f0;
         border: 1px solid rgba(255, 255, 255, 0.15);
-        padding: 6px 10px;
+        padding: 6px 11px;
         border-radius: 20px;
+        font-weight: 600;
         cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 5px;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
       `;
-      settingsBtn.innerHTML = `⚙️`;
+      settingsBtn.innerHTML = `<span>⚙️ Name</span>`;
       settingsBtn.onclick = () => this.openSettings();
 
       container.appendChild(statusBadge);
       container.appendChild(micBtn);
-      container.appendChild(roomBtn);
       container.appendChild(settingsBtn);
       document.body.appendChild(container);
 
@@ -763,10 +790,7 @@
       if (newName && newName.trim()) {
         this.playerName = newName.trim().slice(0, 16);
         localStorage.setItem("cw_player_name", this.playerName);
-      }
-      const newRoom = prompt("Enter Room Name (e.g. cold-world-plaza, secret-peaks):", this.room);
-      if (newRoom && newRoom.trim() && newRoom.trim() !== this.room) {
-        window.location.search = "?room=" + encodeURIComponent(newRoom.trim());
+        this.broadcastLocalState();
       }
     }
 
@@ -803,21 +827,8 @@
     }
 
     updatePlayerListUI() {
-      this.updateStatusUI(`🟢 Online (${this.peers.size + 1}/${this.maxPlayers})`, "#22c55e");
-    }
-
-    copyInviteLink() {
-      const url = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(this.room)}`;
-      navigator.clipboard.writeText(url).then(() => {
-        const btn = document.getElementById("cw-room-btn");
-        if (btn) {
-          const original = btn.innerHTML;
-          btn.innerHTML = `<span style="color:#22c55e;">Copied Link!</span>`;
-          setTimeout(() => { btn.innerHTML = original; }, 2000);
-        }
-      }).catch(() => {
-        prompt("Copy multiplayer invite link to share with friends:", url);
-      });
+      const count = this.peers.size + 1;
+      this.updateStatusUI(`🟢 Live World (${count} Player${count > 1 ? "s" : ""})`, "#22c55e");
     }
   }
 
