@@ -366,17 +366,24 @@
     async enableMic() {
       try {
         if (!this.localStream) {
+          // Disable browser AEC/DSP ducking to prevent degradation or low-pass filtering of background music
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+              googEchoCancellation: false,
+              googAutoGainControl: false,
+              googNoiseSuppression: false,
+              googHighpassFilter: false,
+              googTypingNoiseDetection: false,
+              googAudioMirroring: false
             }
           });
           this.localStream = stream;
 
-          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-          this.audioCtx = this.audioCtx || new AudioContextClass();
+          // Reuse the game's native AudioContext to eliminate dual-context OS mixer ducking and preserve 48kHz audio quality
+          this.audioCtx = window.audioContext || this.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
           if (this.audioCtx.state === "suspended") {
             await this.audioCtx.resume();
           }
@@ -421,8 +428,11 @@
         const p = this.peers.get(call.peer);
         if (!p) return;
 
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-        this.audioCtx = this.audioCtx || new AudioContextClass();
+        // Use the unified AudioContext for remote player voice rendering
+        this.audioCtx = window.audioContext || this.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (this.audioCtx.state === "suspended") {
+          this.audioCtx.resume();
+        }
 
         const src = this.audioCtx.createMediaStreamSource(remoteStream);
         const gainNode = this.audioCtx.createGain();
@@ -440,6 +450,7 @@
         const audioEl = document.createElement("audio");
         audioEl.srcObject = remoteStream;
         audioEl.muted = true;
+        audioEl.volume = 0;
         audioEl.play().catch(() => {});
         p.audioElement = audioEl;
       });
